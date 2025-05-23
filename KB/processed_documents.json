@@ -1,0 +1,51 @@
+{
+  "ICD_CODES:RAG1.pdf": {
+    "file_path": "/home/parvat-khattak/Downloads/brix/Chatbot/KB/RAG1.pdf",
+    "doc_group": "ICD_CODES",
+    "hash": "10c4ef99d510edf6f0e5e63dad4fe87e",
+    "chunk_count": 246,
+    "processed_at": 1747917576.342176
+  },
+  "CPT_PROCEDURES:RAG2_1.pdf": {
+    "file_path": "/home/parvat-khattak/Downloads/brix/Chatbot/KB/RAG2_1.pdf",
+    "doc_group": "CPT_PROCEDURES",
+    "hash": "75095d8fe16970bec533c5e26c54e6db",
+    "chunk_count": 1912,
+    "processed_at": 1747917593.1683736
+  },
+  "CPT_PROCEDURES:RAG2_3.pdf": {
+    "file_path": "/home/parvat-khattak/Downloads/brix/Chatbot/KB/RAG2_3.pdf",
+    "doc_group": "CPT_PROCEDURES",
+    "hash": "3a1a522d6756e86e855f4b3ca5b52d2f",
+    "chunk_count": 81,
+    "processed_at": 1747917594.6396322
+  },
+  "CPT_PROCEDURES:RAG2_2.pdf": {
+    "file_path": "/home/parvat-khattak/Downloads/brix/Chatbot/KB/RAG2_2.pdf",
+    "doc_group": "CPT_PROCEDURES",
+    "hash": "ba2258d9043b48af964f8b4867aa69b7",
+    "chunk_count": 221,
+    "processed_at": 1747917596.2884283
+  },
+  "ICD_CODES:RAG1_1.xlsx": {
+    "file_path": "/home/parvat-khattak/Downloads/brix/Chatbot/KB/RAG1_1.xlsx",
+    "doc_group": "ICD_CODES",
+    "hash": "72cee8defe4b835d4bce96cc9d51fe87",
+    "chunk_count": 216,
+    "processed_at": 1747917596.362536
+  },
+  "CPT_PROCEDURES:RAG2.xlsx": {
+    "file_path": "/home/parvat-khattak/Downloads/brix/Chatbot/KB/RAG2.xlsx",
+    "doc_group": "CPT_PROCEDURES",
+    "hash": "664198bf9ed93816587c5a270b550411",
+    "chunk_count": 5957,
+    "processed_at": 1747917599.5831985
+  },
+  "MEDICAL_TERMINOLOGY:RAG3.csv": {
+    "file_path": "/home/parvat-khattak/Downloads/brix/Chatbot/KB/RAG3.csv",
+    "doc_group": "MEDICAL_TERMINOLOGY",
+    "hash": "8dcadd31dfe89e4ea70141eaf94217ae",
+    "chunk_count": 17988,
+    "processed_at": 1747917606.3626392
+  }
+}
