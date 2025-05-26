@@ -2,258 +2,424 @@ import streamlit as st
 import requests
 import json
 import uuid
-from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import time
 
 # Configure Streamlit page
 st.set_page_config(
-    page_title="Multi-Source RAG Medical Coding Assistant",
+    page_title="Medical Coding Assistant",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for dark mode styling
+# Enhanced CSS for modern dark theme with improved mobile responsiveness
 st.markdown("""
 <style>
-    /* Global dark theme overrides */
-    .main .block-container {
-        background-color: #1e1e1e !important;
-        color: #ffffff !important;
-    }
+    /* Import Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     
+    /* Global dark theme */
     .stApp {
-        background-color: #1e1e1e !important;
-        color: #ffffff !important;
+        font-family: 'Inter', sans-serif;
+        background: linear-gradient(135deg, #0f1419 0%, #1a202c 100%);
+        color: #e2e8f0;
     }
     
-    /* Sidebar dark styling */
-    .css-1d391kg, .css-1cypcdb {
-        background-color: #2d2d2d !important;
-        color: #ffffff !important;
+    .main .block-container {
+        background: transparent;
+        padding-top: 1rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
+        max-width: 1200px;
     }
     
-    /* All text elements */
-    .stMarkdown, .stText, p, div, span, h1, h2, h3, h4, h5, h6 {
-        color: #ffffff !important;
-    }
-    
-    /* Headers */
+    /* Header styling */
     .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #4FC3F7 !important;
+        font-size: clamp(1.8rem, 5vw, 2.8rem);
+        font-weight: 700;
+        background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 50%, #03a9f4 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         text-align: center;
+        margin-bottom: 1.5rem;
+        letter-spacing: -0.02em;
+        line-height: 1.2;
+    }
+    
+    .subtitle {
+        text-align: center;
+        color: #94a3b8;
+        font-size: clamp(0.9rem, 3vw, 1.1rem);
         margin-bottom: 2rem;
+        font-weight: 400;
+        padding: 0 1rem;
+        line-height: 1.4;
     }
     
     /* Chat messages */
     .chat-message {
         padding: 1rem;
-        border-radius: 0.5rem;
+        border-radius: 12px;
         margin: 1rem 0;
-        border-left: 4px solid #4FC3F7;
-        color: #ffffff !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        word-wrap: break-word;
+        overflow-wrap: break-word;
     }
+    
     .user-message {
-        background-color: #2d3748 !important;
-        border-left-color: #4FC3F7;
-        color: #ffffff !important;
+        background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 100%);
+        border-left: 4px solid #3b82f6;
+        margin-left: 10%;
     }
+    
     .assistant-message {
-        background-color: #1a202c !important;
-        border-left-color: #68D391;
-        color: #ffffff !important;
+        background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
+        border-left: 4px solid #10b981;
+        margin-right: 10%;
     }
-    .warning-message {
-        background-color: #744210 !important;
-        border-left-color: #F6E05E;
-        color: #FBD38D !important;
-        border: 1px solid #975A16;
+    
+    .chat-message h4 {
+        color: #f1f5f9;
+        margin-bottom: 0.5rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: clamp(0.9rem, 3vw, 1.1rem);
     }
-    .chat-message strong {
-        color: #ffffff !important;
+    
+    .chat-content {
+        color: #e2e8f0;
+        line-height: 1.6;
+        font-size: clamp(0.85rem, 2.5vw, 0.95rem);
     }
-    .chat-message * {
-        color: #ffffff !important;
+    
+    /* Status indicators */
+    .status-online {
+        color: #10b981;
+        font-weight: 600;
+        font-size: clamp(0.8rem, 2.5vw, 0.9rem);
+    }
+    
+    .status-offline {
+        color: #ef4444;
+        font-weight: 600;
+        font-size: clamp(0.8rem, 2.5vw, 0.9rem);
+    }
+    
+    .status-warning {
+        color: #f59e0b;
+        font-weight: 600;
+        font-size: clamp(0.8rem, 2.5vw, 0.9rem);
     }
     
     /* Source information */
-    .source-info {
-        background-color: #2d3748 !important;
-        padding: 0.5rem;
-        border-radius: 0.3rem;
-        margin: 0.5rem 0;
-        border: 1px solid #4a5568;
-        font-size: 0.9rem;
-        color: #ffffff !important;
-    }
-    .source-info * {
-        color: #ffffff !important;
+    .sources-container {
+        background: rgba(30, 41, 59, 0.8);
+        border-radius: 8px;
+        padding: 0.8rem;
+        margin-top: 1rem;
+        border: 1px solid rgba(148, 163, 184, 0.2);
     }
     
-    /* Structured query */
-    .structured-query {
-        background-color: #1a365d !important;
-        padding: 0.8rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-        border: 1px solid #2c5282;
-        font-size: 0.9rem;
-        color: #ffffff !important;
+    .source-item {
+        background: rgba(51, 65, 85, 0.6);
+        padding: 0.6rem;
+        border-radius: 6px;
+        margin: 0.4rem 0;
+        border-left: 3px solid #3b82f6;
+        font-size: clamp(0.75rem, 2vw, 0.9rem);
+        word-wrap: break-word;
+    }
+    
+    .source-item strong {
+        color: #cbd5e1;
     }
     
     /* Priority badges */
     .priority-badge {
         display: inline-block;
-        padding: 0.2rem 0.5rem;
-        border-radius: 0.3rem;
-        font-size: 0.8rem;
-        font-weight: bold;
-        margin-left: 0.5rem;
-    }
-    .priority-1 { background-color: #22543d; color: #68d391; }
-    .priority-2 { background-color: #744210; color: #f6e05e; }
-    .priority-3 { background-color: #742a2a; color: #feb2b2; }
-    
-    /* Group styling */
-    .group-icd { border-left: 4px solid #68d391; }
-    .group-cpt { border-left: 4px solid #f6e05e; }
-    .group-terminology { border-left: 4px solid #63b3ed; }
-    
-    /* Metrics container */
-    .metrics-container {
-        display: flex;
-        justify-content: space-around;
-        margin: 1rem 0;
+        padding: 0.2rem 0.4rem;
+        border-radius: 6px;
+        font-size: clamp(0.65rem, 1.8vw, 0.75rem);
+        font-weight: 600;
+        margin-left: 0.3rem;
+        white-space: nowrap;
     }
     
-    /* API status indicators */
-    .api-status-online {
-        color: #68d391 !important;
-        font-weight: bold;
+    .priority-1 { 
+        background: rgba(16, 185, 129, 0.2); 
+        color: #10b981; 
+        border: 1px solid rgba(16, 185, 129, 0.3);
     }
-    .api-status-offline {
-        color: #fc8181 !important;
-        font-weight: bold;
+    .priority-2 { 
+        background: rgba(245, 158, 11, 0.2); 
+        color: #f59e0b; 
+        border: 1px solid rgba(245, 158, 11, 0.3);
     }
-    .api-status-limited {
-        color: #f6e05e !important;
-        font-weight: bold;
-    }
-    
-    /* Streamlit components dark styling */
-    .stTextInput input, .stTextArea textarea, .stSelectbox select {
-        background-color: #2d3748 !important;
-        color: #ffffff !important;
-        border: 1px solid #4a5568 !important;
+    .priority-3 { 
+        background: rgba(239, 68, 68, 0.2); 
+        color: #ef4444; 
+        border: 1px solid rgba(239, 68, 68, 0.3);
     }
     
+    /* Sidebar styling */
+    .css-1d391kg {
+        background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+        border-right: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    
+    .sidebar-section {
+        background: rgba(30, 41, 59, 0.6);
+        padding: 0.8rem;
+        border-radius: 8px;
+        margin: 0.8rem 0;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    
+    /* Sidebar text sizing */
+    .css-1d391kg .markdown-text-container {
+        font-size: clamp(0.8rem, 2.2vw, 0.9rem);
+    }
+    
+    /* Input styling */
+    .stTextInput input {
+        background: rgba(30, 41, 59, 0.8) !important;
+        border: 1px solid rgba(148, 163, 184, 0.3) !important;
+        border-radius: 8px !important;
+        color: #e2e8f0 !important;
+        font-size: clamp(0.85rem, 2.5vw, 0.95rem) !important;
+        padding: 0.75rem !important;
+    }
+    
+    .stTextInput input:focus {
+        border-color: #3b82f6 !important;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+    }
+    
+    /* Chat input specific styling */
+    .stChatInput input {
+        font-size: clamp(0.9rem, 2.5vw, 1rem) !important;
+        padding: 1rem !important;
+        min-height: 3rem !important;
+    }
+    
+    /* Button styling */
     .stButton button {
-        background-color: #2d3748 !important;
-        color: #ffffff !important;
-        border: 1px solid #4a5568 !important;
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 500 !important;
+        transition: all 0.2s ease !important;
+        font-size: clamp(0.8rem, 2.2vw, 0.9rem) !important;
+        padding: 0.75rem 1rem !important;
+        width: 100% !important;
+        min-height: 2.5rem !important;
     }
     
     .stButton button:hover {
-        background-color: #4a5568 !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3) !important;
+    }
+    
+    /* Quick action buttons */
+    .quick-btn {
+        background: rgba(71, 85, 105, 0.6) !important;
+        border: 1px solid rgba(148, 163, 184, 0.3) !important;
+        color: #ffffff !important;
+        text-align: left !important;
+        font-size: clamp(0.75rem, 2vw, 0.9rem) !important;
+        margin: 0.2rem 0 !important;
+        padding: 0.6rem 0.8rem !important;
+        line-height: 1.3 !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
+    }
+
+    .quick-btn:hover {
+        background: rgba(71, 85, 105, 0.8) !important;
+        border-color: #cbd5e1 !important;
         color: #ffffff !important;
     }
     
     /* Expander styling */
     .streamlit-expanderHeader {
-        background-color: #2d3748 !important;
-        color: #ffffff !important;
+        background: rgba(30, 41, 59, 0.6) !important;
+        border-radius: 8px !important;
+        color: #e2e8f0 !important;
+        font-weight: 500 !important;
+        font-size: clamp(0.8rem, 2.2vw, 0.9rem) !important;
+        padding: 0.75rem !important;
     }
     
     .streamlit-expanderContent {
-        background-color: #1a202c !important;
-        color: #ffffff !important;
-    }
-    
-    /* Code blocks */
-    .stCode, code, pre {
-        background-color: #2d3748 !important;
-        color: #ffffff !important;
-        border: 1px solid #4a5568 !important;
+        background: rgba(15, 23, 42, 0.8) !important;
+        border-radius: 0 0 8px 8px !important;
+        padding: 0.5rem !important;
     }
     
     /* Metrics */
     .metric-container {
-        background-color: #2d3748 !important;
-        color: #ffffff !important;
+        background: rgba(30, 41, 59, 0.6);
+        padding: 0.8rem;
+        border-radius: 8px;
+        text-align: center;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        font-size: clamp(0.8rem, 2.2vw, 0.9rem);
     }
     
-    /* Sidebar elements */
-    .css-1cypcdb .stMarkdown, .css-1cypcdb .stText {
-        background-color: #2d2d2d !important;
-        color: #ffffff !important;
-    }
-    
-    /* Footer styling */
-    .footer-text {
-        color: #a0aec0 !important;
-    }
-    
-    /* Override any remaining light backgrounds */
-    div[data-testid="stSidebar"] {
-        background-color: #2d2d2d !important;
-    }
-    
-    div[data-testid="stSidebar"] * {
-        color: #ffffff !important;
-    }
-    
-    .stAlert {
-        background-color: #744210 !important;
-        color: #ffffff !important;
-        border: 1px solid #975A16 !important;
-    }
-    
-    .stSuccess {
-        background-color: #22543d !important;
-        color: #ffffff !important;
-        border: 1px solid #2f855a !important;
+    /* Info boxes */
+    .stInfo {
+        font-size: clamp(0.75rem, 2vw, 0.85rem) !important;
     }
     
     .stError {
-        background-color: #742a2a !important;
-        color: #ffffff !important;
-        border: 1px solid #c53030 !important;
+        font-size: clamp(0.75rem, 2vw, 0.85rem) !important;
     }
     
-    .stWarning {
-        background-color: #744210 !important;
-        color: #ffffff !important;
-        border: 1px solid #975A16 !important;
+    /* Loading spinner */
+    .stSpinner {
+        color: #3b82f6 !important;
+    }
+    
+    /* Footer */
+    .footer {
+        text-align: center;
+        color: #64748b;
+        font-size: clamp(0.7rem, 1.8vw, 0.85rem);
+        margin-top: 2rem;
+        padding: 1.5rem 0;
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+        line-height: 1.4;
+    }
+    
+    /* Hide default Streamlit elements */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Responsive design for mobile */
+    @media (max-width: 768px) {
+        .main .block-container {
+            padding-top: 0.5rem;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+        
+        .user-message, .assistant-message {
+            margin-left: 0;
+            margin-right: 0;
+            padding: 0.8rem;
+        }
+        
+        .chat-message {
+            margin: 0.8rem 0;
+        }
+        
+        .main-header {
+            margin-bottom: 1rem;
+        }
+        
+        .subtitle {
+            margin-bottom: 1.5rem;
+            padding: 0 0.5rem;
+        }
+        
+        .priority-badge {
+            display: block;
+            margin: 0.2rem 0;
+            margin-left: 0;
+        }
+        
+        .source-item {
+            padding: 0.5rem;
+            margin: 0.3rem 0;
+        }
+        
+        .sources-container {
+            padding: 0.6rem;
+        }
+        
+        /* Sidebar adjustments for mobile */
+        .css-1d391kg {
+            width: 100% !important;
+        }
+        
+        /* Make buttons more touch-friendly */
+        .stButton button {
+            min-height: 3rem !important;
+            padding: 1rem !important;
+        }
+        
+        .quick-btn {
+            min-height: 2.5rem !important;
+            padding: 0.8rem !important;
+        }
+    }
+    
+    /* Extra small screens */
+    @media (max-width: 480px) {
+        .main .block-container {
+            padding-left: 0.25rem;
+            padding-right: 0.25rem;
+        }
+        
+        .chat-message {
+            padding: 0.6rem;
+            margin: 0.6rem 0;
+        }
+        
+        .sidebar-section {
+            padding: 0.6rem;
+            margin: 0.6rem 0;
+        }
+        
+        .footer {
+            padding: 1rem 0;
+            margin-top: 1.5rem;
+        }
+    }
+    
+    /* Large screens */
+    @media (min-width: 1200px) {
+        .user-message {
+            margin-left: 20%;
+        }
+        
+        .assistant-message {
+            margin-right: 20%;
+        }
+        
+        .chat-message {
+            padding: 1.5rem;
+        }
+    }
+    
+    /* Tablet portrait */
+    @media (max-width: 1024px) and (min-width: 769px) {
+        .user-message {
+            margin-left: 15%;
+        }
+        
+        .assistant-message {
+            margin-right: 15%;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
 
 # Configuration
-FASTAPI_URL = "http://localhost:8000"  # Change this to your FastAPI server URL
+FASTAPI_URL = "http://localhost:8000"
 
-# Document groups mapping (matching the FastAPI structure)
+# Document groups info (simplified)
 DOCUMENT_GROUPS = {
-    "ICD_CODES": {
-        "name": "ICD-10 Guidelines & References",
-        "description": "ICD-10 Coding Guidelines and References",
-        "priority": 1,
-        "color": "#28a745"
-    },
-    "CPT_PROCEDURES": {
-        "name": "CPT Procedures & Documentation",
-        "description": "CPT Procedure Codes and Documentation",
-        "priority": 2,
-        "color": "#ffc107"
-    },
-    "MEDICAL_TERMINOLOGY": {
-        "name": "Medical Terminology & Definitions",
-        "description": "Medical Terminology and Definitions",
-        "priority": 3,
-        "color": "#17a2b8"
-    }
+    "ICD_CODES": {"name": "ICD-10 Guidelines", "priority": 1},
+    "CPT_PROCEDURES": {"name": "CPT Procedures", "priority": 2},
+    "MEDICAL_TERMINOLOGY": {"name": "Medical Terminology", "priority": 3}
 }
 
 # Initialize session state
@@ -262,441 +428,233 @@ if "messages" not in st.session_state:
 if "chat_id" not in st.session_state:
     st.session_state.chat_id = str(uuid.uuid4())
 if "user_id" not in st.session_state:
-    st.session_state.user_id = "streamlit_user"
-if "show_debug" not in st.session_state:
-    st.session_state.show_debug = False
-if "api_health" not in st.session_state:
-    st.session_state.api_health = {}
+    st.session_state.user_id = "user"
 
-def call_chatbot_api(question: str, show_retrieved_data: bool = False) -> Dict[str, Any]:
-    """Call the FastAPI chatbot endpoint with enhanced error handling"""
+def call_chatbot_api(question: str) -> Dict[str, Any]:
+    """Call the FastAPI chatbot endpoint"""
     try:
         payload = {
             "question": question,
             "chat_id": st.session_state.chat_id,
-            "user_id": st.session_state.user_id,
-            "show_retrieved_data": show_retrieved_data
+            "user_id": st.session_state.user_id
         }
         
         response = requests.post(
             f"{FASTAPI_URL}/api/chat",
             json=payload,
-            timeout=60  # Increased timeout for Gemini API calls
+            timeout=60
         )
         
         if response.status_code == 200:
-            data = response.json()
-            return data
+            return response.json()
         elif response.status_code == 429:
             return {
-                "answer": "⚠️ API rate limit exceeded. Please wait a moment before trying again.",
-                "sources": [],
-                "structured_query": None,
-                "warning": "Rate limit exceeded"
+                "answer": "⚠️ Rate limit exceeded. Please wait before trying again.",
+                "sources": []
             }
         else:
             return {
-                "answer": f"❌ API Error: Server returned status code {response.status_code}",
-                "sources": [],
-                "structured_query": None,
-                "warning": f"HTTP {response.status_code} error"
+                "answer": f"❌ Server error (Status: {response.status_code})",
+                "sources": []
             }
     except requests.exceptions.ConnectionError:
         return {
-            "answer": "❌ Connection Error: Could not connect to the chatbot API. Please make sure the FastAPI server is running on the correct port.",
-            "sources": [],
-            "structured_query": None,
-            "warning": "Connection failed"
+            "answer": "❌ Cannot connect to server. Please ensure the FastAPI server is running.",
+            "sources": []
         }
     except requests.exceptions.Timeout:
         return {
-            "answer": "⏱️ Request timed out. The API might be processing a complex query or experiencing high load. Please try again.",
-            "sources": [],
-            "structured_query": None,
-            "warning": "Request timeout"
+            "answer": "⏱️ Request timed out. Please try again.",
+            "sources": []
         }
     except Exception as e:
         return {
-            "answer": f"❌ Unexpected Error: {str(e)}",
-            "sources": [],
-            "structured_query": None,
-            "warning": "Unexpected error occurred"
+            "answer": f"❌ Error: {str(e)}",
+            "sources": []
         }
 
-def get_api_health() -> Dict[str, Any]:
-    """Get detailed API health information"""
+def check_api_health() -> Dict[str, str]:
+    """Check API health status"""
     try:
-        response = requests.get(f"{FASTAPI_URL}/api/health", timeout=10)
+        response = requests.get(f"{FASTAPI_URL}/api/health", timeout=5)
         if response.status_code == 200:
-            return response.json()
+            return {"status": "online", "message": "API is healthy"}
         else:
-            return {"status": "error", "error": f"HTTP {response.status_code}"}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-def get_collection_stats() -> Dict[str, Any]:
-    """Get collection statistics"""
-    try:
-        response = requests.get(f"{FASTAPI_URL}/api/collection/stats", timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return {"error": f"HTTP {response.status_code}"}
-    except Exception as e:
-        return {"error": str(e)}
-
-def display_structured_query(structured_query: Dict[str, Any]):
-    """Display the structured query information with enhanced formatting"""
-    if structured_query:
-        with st.expander("🔍 Query Analysis & Processing", expanded=False):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**🎯 Intent Detection:**")
-                intent = structured_query.get("intent", "Unknown")
-                st.code(intent)
-                
-                st.markdown("**🔄 Query Refinement:**")
-                refined_query = structured_query.get("search_query", structured_query.get("query", ""))
-                st.text_area("Processed Query", refined_query, height=68, disabled=True)
-            
-            with col2:
-                filters = structured_query.get("filters", {})
-                st.markdown("**🔍 Extracted Filters:**")
-                
-                if filters.get("keywords"):
-                    st.write("**Keywords:**", ", ".join(filters["keywords"]))
-                if filters.get("code"):
-                    st.write("**Code:**", filters["code"])
-                
-                # Show the original query for comparison
-                st.markdown("**📝 Original Query:**")
-                st.text_area("User Input", structured_query.get("query", ""), height=68, disabled=True)
+            return {"status": "error", "message": f"HTTP {response.status_code}"}
+    except:
+        return {"status": "offline", "message": "Cannot connect to API"}
 
 def display_sources(sources: List[Dict[str, Any]]):
-    """Display source information with enhanced formatting"""
-    if sources:
-        with st.expander(f"📚 Knowledge Sources ({len(sources)} found)", expanded=False):
-            # Group sources by priority
-            sources_by_priority = {}
-            for source in sources:
-                priority = source.get('source_priority', 99)
-                if priority not in sources_by_priority:
-                    sources_by_priority[priority] = []
-                sources_by_priority[priority].append(source)
+    """Display source information"""
+    if not sources:
+        return
+        
+    with st.expander(f"📚 Sources ({len(sources)} found)", expanded=False):
+        st.markdown('<div class="sources-container">', unsafe_allow_html=True)
+        
+        for i, source in enumerate(sources):
+            group = source.get('source_group', 'UNKNOWN')
+            group_name = DOCUMENT_GROUPS.get(group, {}).get('name', group)
+            priority = source.get('source_priority', 99)
+            score = source.get('score', 0)
+            file_name = source.get('file_name', 'Unknown')
             
-            # Display sources grouped by priority
-            for priority in sorted(sources_by_priority.keys()):
-                priority_sources = sources_by_priority[priority]
-                
-                st.markdown(f"**Priority {priority} Sources ({len(priority_sources)} items):**")
-                
-                for i, source in enumerate(priority_sources):
-                    group = source.get('source_group', 'UNKNOWN')
-                    group_info = DOCUMENT_GROUPS.get(group, {})
-                    
-                    # Get CSS class for group styling
-                    group_class = f"group-{group.lower().split('_')[0]}" if '_' in group else ""
-                    
-                    st.markdown(f"""
-                    <div class="source-info {group_class}">
-                        <strong>📄 {group_info.get('name', group)}</strong>
-                        <span class="priority-badge priority-{priority}">Priority {priority}</span><br>
-                        <small><strong>File:</strong> {source.get('file_name', 'Unknown')}</small><br>
-                        <small><strong>Relevance Score:</strong> {source.get('score', 0):.4f}</small><br>
-                        <small><strong>Chunk:</strong> #{source.get('chunk_index', 0)}</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                st.markdown("---")
-
-def display_retrieved_data(retrieved_data: List[Dict[str, Any]]):
-    """Display retrieved data for debugging purposes"""
-    if retrieved_data:
-        with st.expander(f"🔍 Retrieved Data ({len(retrieved_data)} chunks)", expanded=False):
-            for i, data in enumerate(retrieved_data):
-                with st.container():
-                    col1, col2 = st.columns([3, 1])
-                    
-                    with col1:
-                        st.markdown(f"**Chunk {i+1}:** {data.get('source_group', 'Unknown')}")
-                        st.text_area(
-                            f"Content Preview",
-                            data.get('text', ''),
-                            height=100,
-                            key=f"retrieved_data_{i}",
-                            disabled=True
-                        )
-                    
-                    with col2:
-                        st.metric("Score", f"{data.get('score', 0):.4f}")
-                        st.write(f"**File:** {data.get('file_name', 'Unknown')}")
-                        st.write(f"**Chunk:** #{data.get('chunk_index', 0)}")
-
-def display_chat_message(message: Dict[str, Any], is_user: bool = False):
-    """Display a chat message with proper styling and enhanced features"""
-    if is_user:
-        st.markdown(f"""
-        <div class="chat-message user-message">
-            <strong>👤 You:</strong><br>
-            {message['content']}
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        # Display warning if present
-        if message.get('warning'):
             st.markdown(f"""
-            <div class="chat-message warning-message">
-                <strong>⚠️ Notice:</strong> {message['warning']}
+            <div class="source-item">
+                <strong>{group_name}</strong>
+                <span class="priority-badge priority-{priority}">Priority {priority}</span><br>
+                <small><strong>File:</strong> {file_name}</small><br>
+                <small><strong>Relevance:</strong> {score:.3f}</small>
             </div>
             """, unsafe_allow_html=True)
         
+        st.markdown('</div>', unsafe_allow_html=True)
+
+def display_chat_message(message: Dict[str, Any], is_user: bool = False):
+    """Display a chat message with modern styling"""
+    if is_user:
+        st.markdown(f"""
+        <div class="chat-message user-message">
+            <h4>👤 You</h4>
+            <div class="chat-content">{message['content']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
         st.markdown(f"""
         <div class="chat-message assistant-message">
-            <strong>🤖 Medical Coding Assistant:</strong><br>
-            {message['content']}
+            <h4>🤖 Medical Coding Assistant</h4>
+            <div class="chat-content">{message['content']}</div>
         </div>
         """, unsafe_allow_html=True)
         
-        # Display additional information if available
-        if 'structured_query' in message and message['structured_query']:
-            display_structured_query(message['structured_query'])
-        
-        if 'sources' in message and message['sources']:
+        # Display sources if available
+        if message.get('sources'):
             display_sources(message['sources'])
-        
-        if 'retrieved_data' in message and message['retrieved_data'] and st.session_state.show_debug:
-            display_retrieved_data(message['retrieved_data'])
 
 def main():
     # Header
-    st.markdown('<h1 class="main-header">🏥 Multi-Source RAG Medical Coding Assistant</h1>', unsafe_allow_html=True)
+    st.markdown("""
+    <h1 class="main-header">🏥 Medical Coding Assistant</h1>
+    <p class="subtitle">AI-powered ICD-10 and CPT coding guidance with comprehensive source documentation</p>
+    """, unsafe_allow_html=True)
     
-    # Get API health status
-    health_info = get_api_health()
-    st.session_state.api_health = health_info
+    # Check API health
+    health = check_api_health()
+    api_online = health["status"] == "online"
     
     # Sidebar
     with st.sidebar:
-        st.header("ℹ️ System Information")
+        st.markdown("## 📊 System Status")
         
-        # API Status with detailed information
-        status = health_info.get("status", "unknown")
-        if status == "healthy":
-            st.markdown('<p class="api-status-online">🟢 API: Online & Healthy</p>', unsafe_allow_html=True)
-            
-            # Show Gemini status
-            gemini_status = health_info.get("gemini_status", "unknown")
-            if "limited" in str(gemini_status).lower():
-                st.markdown(f'<p class="api-status-limited">⚠️ Gemini: {gemini_status}</p>', unsafe_allow_html=True)
-            else:
-                st.markdown('<p class="api-status-online">🟢 Gemini: Available</p>', unsafe_allow_html=True)
-            
-            # Show daily requests if available
-            daily_requests = health_info.get("daily_requests_used")
-            if daily_requests is not None:
-                st.write(f"**Daily API Usage:** {daily_requests}/500 requests")
-                if daily_requests > 450:
-                    st.warning("⚠️ Approaching daily limit")
+        # API Status
+        if api_online:
+            st.markdown('<p class="status-online">🟢 API Online</p>', unsafe_allow_html=True)
         else:
-            st.markdown('<p class="api-status-offline">🔴 API: Offline</p>', unsafe_allow_html=True)
-            st.error("❌ FastAPI server is not running. Please start the server before using the chatbot.")
+            st.markdown('<p class="status-offline">🔴 API Offline</p>', unsafe_allow_html=True)
+            st.error(health["message"])
         
-        st.write(f"**Chat Session:** `{st.session_state.chat_id[:8]}...`")
-        st.write(f"**Total Messages:** {len(st.session_state.messages)}")
+        # Session info
+        st.markdown("## 💬 Session Info")
+        st.info(f"**Messages:** {len(st.session_state.messages)}")
+        st.info(f"**Session ID:** `{st.session_state.chat_id[:8]}...`")
         
-        # Collection Statistics
-        if status == "healthy":
-            st.header("📊 Knowledge Base Stats")
-            stats = get_collection_stats()
-            
-            if "error" not in stats:
-                st.metric("Total Chunks", stats.get("total_chunks", 0))
-                
-                groups = stats.get("groups", {})
-                for group_key, count in groups.items():
-                    group_info = DOCUMENT_GROUPS.get(group_key, {})
-                    group_name = group_info.get("name", group_key)
-                    st.write(f"**{group_name}:** {count} chunks")
-        
-        # Document Groups Info
-        st.header("📁 Knowledge Sources")
+        # Knowledge sources
+        st.markdown("## 📁 Knowledge Sources")
         for group_key, group_info in DOCUMENT_GROUPS.items():
-            priority = group_info.get("priority", 99)
-            st.markdown(f"""
-            **{group_info['name']}** (Priority {priority})  
-            {group_info['description']}
-            """)
+            priority = group_info["priority"]
+            name = group_info["name"]
+            st.markdown(f"• **{name}** (Priority {priority})")
         
-        # Settings
-        st.header("⚙️ Settings")
-        st.session_state.user_id = st.text_input("User ID", value=st.session_state.user_id)
-        st.session_state.show_debug = st.checkbox("Show Debug Information", value=st.session_state.show_debug)
+        # Quick actions
+        st.markdown("## ⚡ Quick Start")
         
-        # Clear Chat Button
-        if st.button("🗑️ Clear Chat History"):
+        sample_questions = [
+            "What is the ICD-10 code for diabetes?",
+            "How do I code pneumonia?",
+            "Hypertension coding guidelines",
+            "ICD-10 sequencing rules",
+            "CPT evaluation codes"
+        ]
+        
+        for i, question in enumerate(sample_questions):
+            if st.button(question, key=f"sample_{i}", disabled=not api_online, 
+                        help="Click to ask this question"):
+                st.session_state.temp_question = question
+                st.rerun()
+        
+        # Clear chat
+        if st.button("🗑️ Clear Chat", type="secondary"):
             st.session_state.messages = []
             st.session_state.chat_id = str(uuid.uuid4())
             st.rerun()
         
         # Instructions
-        st.header("📋 Usage Instructions")
+        st.markdown("## 📋 How to Use")
         st.markdown("""
-        **How to use this assistant:**
-        1. Type your medical coding question below
-        2. Review the query analysis and processing
-        3. Read the comprehensive answer with sources
-        4. Check source priorities and relevance scores
-        5. Ask follow-up questions for clarification
+        1. **Ask Questions**: Type medical coding questions below
+        2. **Review Sources**: Check the source references for each answer
+        3. **Follow Up**: Ask clarifying questions as needed
         
-        **Example questions:**
-        - "What is the ICD-10 code for Type 2 diabetes with complications?"
-        - "How do I code acute myocardial infarction with STEMI?"
-        - "What are the sequencing guidelines for multiple diagnoses?"
-        - "Explain the difference between CPT codes 99213 and 99214"
-        - "What documentation is required for diabetes coding?"
+        **Example Questions:**
+        - "What is the ICD-10 code for acute MI?"
+        - "How do I code diabetes with complications?"
+        - "What are the guidelines for sequencing codes?"
         """)
-    
-    # Main chat interface
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        # Display chat messages
-        chat_container = st.container()
-        
-        with chat_container:
-            for message in st.session_state.messages:
-                if message["role"] == "user":
-                    display_chat_message(message, is_user=True)
-                else:
-                    display_chat_message(message, is_user=False)
-        
-        # Chat input
-        api_available = health_info.get("status") == "healthy"
-        placeholder_text = "Ask me about medical coding..." if api_available else "API server offline - please start the FastAPI server"
-        
-        if prompt := st.chat_input(placeholder_text, disabled=not api_available):
-            # Add user message to chat history
-            user_message = {"role": "user", "content": prompt}
-            st.session_state.messages.append(user_message)
-            
-            # Display user message immediately
-            display_chat_message(user_message, is_user=True)
-            
-            # Show loading spinner with context
-            with st.spinner("🔍 Analyzing query and searching knowledge base..."):
-                # Call the API with debug data if requested
-                response = call_chatbot_api(prompt, show_retrieved_data=st.session_state.show_debug)
-                
-                # Add assistant response to chat history
-                assistant_message = {
-                    "role": "assistant",
-                    "content": response["answer"],
-                    "sources": response.get("sources", []),
-                    "structured_query": response.get("structured_query"),
-                    "warning": response.get("warning"),
-                    "retrieved_data": response.get("retrieved_data")
-                }
-                st.session_state.messages.append(assistant_message)
-            
-            # Rerun to display the new message
-            st.rerun()
-    
-    with col2:
-        # Statistics and metrics
-        st.header("📊 Session Analytics")
-        
-        if st.session_state.messages:
-            user_messages = [msg for msg in st.session_state.messages if msg["role"] == "user"]
-            assistant_messages = [msg for msg in st.session_state.messages if msg["role"] == "assistant"]
-            
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.metric("Questions", len(user_messages))
-            with col_b:
-                st.metric("Responses", len(assistant_messages))
-            
-            # Analyze recent warnings
-            recent_warnings = []
-            for msg in reversed(st.session_state.messages):
-                if msg["role"] == "assistant" and msg.get("warning"):
-                    recent_warnings.append(msg["warning"])
-                    if len(recent_warnings) >= 3:
-                        break
-            
-            if recent_warnings:
-                st.header("⚠️ Recent Notices")
-                for warning in recent_warnings:
-                    st.warning(warning)
-            
-            # Recent sources analysis
-            recent_sources = []
-            source_groups = {}
-            for msg in reversed(st.session_state.messages):
-                if msg["role"] == "assistant" and msg.get("sources"):
-                    for source in msg["sources"]:
-                        group = source.get('source_group', 'Unknown')
-                        source_groups[group] = source_groups.get(group, 0) + 1
-                        recent_sources.append(source)
-                    if len(recent_sources) >= 10:
-                        break
-            
-            if source_groups:
-                st.header("📚 Source Usage")
-                for group, count in source_groups.items():
-                    group_info = DOCUMENT_GROUPS.get(group, {})
-                    group_name = group_info.get("name", group)
-                    st.write(f"• **{group_name}:** {count} references")
-        
-        # Quick actions
-        st.header("⚡ Quick Start Questions")
-        
-        sample_questions = [
-            "What is the ICD-10 code for diabetes mellitus?",
-            "How do I code pneumonia with complications?",
-            "What are the hypertension coding guidelines?",
-            "Explain ICD-10 sequencing rules",
-            "What's the difference between I21.0 and I21.9?",
-            "How do I document CPT evaluation codes?",
-            "What are the requirements for modifier usage?"
-        ]
-        
-        for i, question in enumerate(sample_questions):
-            if st.button(question, key=f"sample_{i}", disabled=not api_available):
-                # Add to session state to trigger processing
-                st.session_state.temp_question = question
-                st.rerun()
-        
-        # Handle sample question
-        if hasattr(st.session_state, 'temp_question'):
-            question = st.session_state.temp_question
-            delattr(st.session_state, 'temp_question')
-            
-            # Add user message
-            user_message = {"role": "user", "content": question}
-            st.session_state.messages.append(user_message)
-            
-            # Call API
-            with st.spinner("🔍 Processing your question..."):
-                response = call_chatbot_api(question, show_retrieved_data=st.session_state.show_debug)
-                assistant_message = {
-                    "role": "assistant",
-                    "content": response["answer"],
-                    "sources": response.get("sources", []),
-                    "structured_query": response.get("structured_query"),
-                    "warning": response.get("warning"),
-                    "retrieved_data": response.get("retrieved_data")
-                }
-                st.session_state.messages.append(assistant_message)
-            
-            st.rerun()
 
-    # Footer with additional information
-    st.markdown("---")
+    # Main chat area
+    # Display chat history
+    for message in st.session_state.messages:
+        if message["role"] == "user":
+            display_chat_message(message, is_user=True)
+        else:
+            display_chat_message(message, is_user=False)
+    
+    # Handle sample questions
+    if hasattr(st.session_state, 'temp_question'):
+        question = st.session_state.temp_question
+        delattr(st.session_state, 'temp_question')
+        
+        # Add user message
+        user_message = {"role": "user", "content": question}
+        st.session_state.messages.append(user_message)
+        display_chat_message(user_message, is_user=True)
+        
+        # Get AI response
+        with st.spinner("🔍 Analyzing your question..."):
+            response = call_chatbot_api(question)
+            assistant_message = {
+                "role": "assistant",
+                "content": response["answer"],
+                "sources": response.get("sources", [])
+            }
+            st.session_state.messages.append(assistant_message)
+            display_chat_message(assistant_message, is_user=False)
+    
+    # Chat input
+    placeholder_text = "Ask me about medical coding..." if api_online else "API server offline"
+    
+    if prompt := st.chat_input(placeholder_text, disabled=not api_online):
+        # Add user message
+        user_message = {"role": "user", "content": prompt}
+        st.session_state.messages.append(user_message)
+        display_chat_message(user_message, is_user=True)
+        
+        # Get AI response
+        with st.spinner("🔍 Searching knowledge base..."):
+            response = call_chatbot_api(prompt)
+            assistant_message = {
+                "role": "assistant",
+                "content": response["answer"],
+                "sources": response.get("sources", [])
+            }
+            st.session_state.messages.append(assistant_message)
+            display_chat_message(assistant_message, is_user=False)
+
+    # Footer
     st.markdown("""
-    <div style="text-align: center; color: #a0aec0; font-size: 0.9rem;" class="footer-text">
-        <p>🏥 Multi-Source RAG Medical Coding Assistant | Powered by Gemini AI & Qdrant Vector Database</p>
-        <p>⚠️ For educational purposes only. Always consult official coding manuals and guidelines for clinical use.</p>
+    <div class="footer">
+        <p>🏥 Medical Coding Assistant | Powered by Gemini AI & Qdrant Vector Database</p>
+        <p>⚠️ For educational purposes only. Always consult official coding guidelines for clinical use.</p>
     </div>
     """, unsafe_allow_html=True)
 
