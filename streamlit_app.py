@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Enhanced CSS for modern dark theme
+# Enhanced CSS for modern dark theme with improved mobile responsiveness
 st.markdown("""
 <style>
     /* Import Google Fonts */
@@ -28,50 +28,57 @@ st.markdown("""
     
     .main .block-container {
         background: transparent;
-        padding-top: 2rem;
+        padding-top: 1rem;
+        padding-left: 1rem;
+        padding-right: 1rem;
         max-width: 1200px;
     }
     
     /* Header styling */
     .main-header {
-        font-size: 2.8rem;
+        font-size: clamp(1.8rem, 5vw, 2.8rem);
         font-weight: 700;
         background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 50%, #03a9f4 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
-        margin-bottom: 2rem;
+        margin-bottom: 1.5rem;
         letter-spacing: -0.02em;
+        line-height: 1.2;
     }
     
     .subtitle {
         text-align: center;
         color: #94a3b8;
-        font-size: 1.1rem;
-        margin-bottom: 3rem;
+        font-size: clamp(0.9rem, 3vw, 1.1rem);
+        margin-bottom: 2rem;
         font-weight: 400;
+        padding: 0 1rem;
+        line-height: 1.4;
     }
     
     /* Chat messages */
     .chat-message {
-        padding: 1.5rem;
+        padding: 1rem;
         border-radius: 12px;
-        margin: 1.5rem 0;
+        margin: 1rem 0;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
         backdrop-filter: blur(10px);
         border: 1px solid rgba(255, 255, 255, 0.1);
+        word-wrap: break-word;
+        overflow-wrap: break-word;
     }
     
     .user-message {
         background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 100%);
         border-left: 4px solid #3b82f6;
-        margin-left: 20%;
+        margin-left: 10%;
     }
     
     .assistant-message {
         background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
         border-left: 4px solid #10b981;
-        margin-right: 20%;
+        margin-right: 10%;
     }
     
     .chat-message h4 {
@@ -81,46 +88,51 @@ st.markdown("""
         display: flex;
         align-items: center;
         gap: 0.5rem;
+        font-size: clamp(0.9rem, 3vw, 1.1rem);
     }
     
     .chat-content {
         color: #e2e8f0;
         line-height: 1.6;
-        font-size: 0.95rem;
+        font-size: clamp(0.85rem, 2.5vw, 0.95rem);
     }
     
     /* Status indicators */
     .status-online {
         color: #10b981;
         font-weight: 600;
+        font-size: clamp(0.8rem, 2.5vw, 0.9rem);
     }
     
     .status-offline {
         color: #ef4444;
         font-weight: 600;
+        font-size: clamp(0.8rem, 2.5vw, 0.9rem);
     }
     
     .status-warning {
         color: #f59e0b;
         font-weight: 600;
+        font-size: clamp(0.8rem, 2.5vw, 0.9rem);
     }
     
     /* Source information */
     .sources-container {
         background: rgba(30, 41, 59, 0.8);
         border-radius: 8px;
-        padding: 1rem;
+        padding: 0.8rem;
         margin-top: 1rem;
         border: 1px solid rgba(148, 163, 184, 0.2);
     }
     
     .source-item {
         background: rgba(51, 65, 85, 0.6);
-        padding: 0.75rem;
+        padding: 0.6rem;
         border-radius: 6px;
-        margin: 0.5rem 0;
+        margin: 0.4rem 0;
         border-left: 3px solid #3b82f6;
-        font-size: 0.9rem;
+        font-size: clamp(0.75rem, 2vw, 0.9rem);
+        word-wrap: break-word;
     }
     
     .source-item strong {
@@ -130,11 +142,12 @@ st.markdown("""
     /* Priority badges */
     .priority-badge {
         display: inline-block;
-        padding: 0.25rem 0.5rem;
+        padding: 0.2rem 0.4rem;
         border-radius: 6px;
-        font-size: 0.75rem;
+        font-size: clamp(0.65rem, 1.8vw, 0.75rem);
         font-weight: 600;
-        margin-left: 0.5rem;
+        margin-left: 0.3rem;
+        white-space: nowrap;
     }
     
     .priority-1 { 
@@ -161,10 +174,15 @@ st.markdown("""
     
     .sidebar-section {
         background: rgba(30, 41, 59, 0.6);
-        padding: 1rem;
+        padding: 0.8rem;
         border-radius: 8px;
-        margin: 1rem 0;
+        margin: 0.8rem 0;
         border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    
+    /* Sidebar text sizing */
+    .css-1d391kg .markdown-text-container {
+        font-size: clamp(0.8rem, 2.2vw, 0.9rem);
     }
     
     /* Input styling */
@@ -173,12 +191,20 @@ st.markdown("""
         border: 1px solid rgba(148, 163, 184, 0.3) !important;
         border-radius: 8px !important;
         color: #e2e8f0 !important;
-        font-size: 0.95rem !important;
+        font-size: clamp(0.85rem, 2.5vw, 0.95rem) !important;
+        padding: 0.75rem !important;
     }
     
     .stTextInput input:focus {
         border-color: #3b82f6 !important;
         box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+    }
+    
+    /* Chat input specific styling */
+    .stChatInput input {
+        font-size: clamp(0.9rem, 2.5vw, 1rem) !important;
+        padding: 1rem !important;
+        min-height: 3rem !important;
     }
     
     /* Button styling */
@@ -189,6 +215,10 @@ st.markdown("""
         border-radius: 8px !important;
         font-weight: 500 !important;
         transition: all 0.2s ease !important;
+        font-size: clamp(0.8rem, 2.2vw, 0.9rem) !important;
+        padding: 0.75rem 1rem !important;
+        width: 100% !important;
+        min-height: 2.5rem !important;
     }
     
     .stButton button:hover {
@@ -202,8 +232,12 @@ st.markdown("""
         border: 1px solid rgba(148, 163, 184, 0.3) !important;
         color: #ffffff !important;
         text-align: left !important;
-        font-size: 0.9rem !important;
-        margin: 0.25rem 0 !important;
+        font-size: clamp(0.75rem, 2vw, 0.9rem) !important;
+        margin: 0.2rem 0 !important;
+        padding: 0.6rem 0.8rem !important;
+        line-height: 1.3 !important;
+        white-space: normal !important;
+        word-wrap: break-word !important;
     }
 
     .quick-btn:hover {
@@ -218,20 +252,33 @@ st.markdown("""
         border-radius: 8px !important;
         color: #e2e8f0 !important;
         font-weight: 500 !important;
+        font-size: clamp(0.8rem, 2.2vw, 0.9rem) !important;
+        padding: 0.75rem !important;
     }
     
     .streamlit-expanderContent {
         background: rgba(15, 23, 42, 0.8) !important;
         border-radius: 0 0 8px 8px !important;
+        padding: 0.5rem !important;
     }
     
     /* Metrics */
     .metric-container {
         background: rgba(30, 41, 59, 0.6);
-        padding: 1rem;
+        padding: 0.8rem;
         border-radius: 8px;
         text-align: center;
         border: 1px solid rgba(148, 163, 184, 0.2);
+        font-size: clamp(0.8rem, 2.2vw, 0.9rem);
+    }
+    
+    /* Info boxes */
+    .stInfo {
+        font-size: clamp(0.75rem, 2vw, 0.85rem) !important;
+    }
+    
+    .stError {
+        font-size: clamp(0.75rem, 2vw, 0.85rem) !important;
     }
     
     /* Loading spinner */
@@ -243,10 +290,11 @@ st.markdown("""
     .footer {
         text-align: center;
         color: #64748b;
-        font-size: 0.85rem;
-        margin-top: 3rem;
-        padding: 2rem 0;
+        font-size: clamp(0.7rem, 1.8vw, 0.85rem);
+        margin-top: 2rem;
+        padding: 1.5rem 0;
         border-top: 1px solid rgba(148, 163, 184, 0.2);
+        line-height: 1.4;
     }
     
     /* Hide default Streamlit elements */
@@ -254,22 +302,118 @@ st.markdown("""
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
-    /* Responsive design */
+    /* Responsive design for mobile */
     @media (max-width: 768px) {
+        .main .block-container {
+            padding-top: 0.5rem;
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+        
         .user-message, .assistant-message {
             margin-left: 0;
             margin-right: 0;
+            padding: 0.8rem;
+        }
+        
+        .chat-message {
+            margin: 0.8rem 0;
         }
         
         .main-header {
-            font-size: 2.2rem;
+            margin-bottom: 1rem;
+        }
+        
+        .subtitle {
+            margin-bottom: 1.5rem;
+            padding: 0 0.5rem;
+        }
+        
+        .priority-badge {
+            display: block;
+            margin: 0.2rem 0;
+            margin-left: 0;
+        }
+        
+        .source-item {
+            padding: 0.5rem;
+            margin: 0.3rem 0;
+        }
+        
+        .sources-container {
+            padding: 0.6rem;
+        }
+        
+        /* Sidebar adjustments for mobile */
+        .css-1d391kg {
+            width: 100% !important;
+        }
+        
+        /* Make buttons more touch-friendly */
+        .stButton button {
+            min-height: 3rem !important;
+            padding: 1rem !important;
+        }
+        
+        .quick-btn {
+            min-height: 2.5rem !important;
+            padding: 0.8rem !important;
+        }
+    }
+    
+    /* Extra small screens */
+    @media (max-width: 480px) {
+        .main .block-container {
+            padding-left: 0.25rem;
+            padding-right: 0.25rem;
+        }
+        
+        .chat-message {
+            padding: 0.6rem;
+            margin: 0.6rem 0;
+        }
+        
+        .sidebar-section {
+            padding: 0.6rem;
+            margin: 0.6rem 0;
+        }
+        
+        .footer {
+            padding: 1rem 0;
+            margin-top: 1.5rem;
+        }
+    }
+    
+    /* Large screens */
+    @media (min-width: 1200px) {
+        .user-message {
+            margin-left: 20%;
+        }
+        
+        .assistant-message {
+            margin-right: 20%;
+        }
+        
+        .chat-message {
+            padding: 1.5rem;
+        }
+    }
+    
+    /* Tablet portrait */
+    @media (max-width: 1024px) and (min-width: 769px) {
+        .user-message {
+            margin-left: 15%;
+        }
+        
+        .assistant-message {
+            margin-right: 15%;
         }
     }
 </style>
 """, unsafe_allow_html=True)
 
 # Configuration
-FASTAPI_URL = "https://chatbot-vl3b.onrender.com"
+FASTAPI_URL = "http://localhost:8000"
 
 # Document groups info (simplified)
 DOCUMENT_GROUPS = {
