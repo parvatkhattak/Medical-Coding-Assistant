@@ -102,3 +102,4 @@ zstandard==0.23.0
 streamlit
 uvicorn
 nltk
+google.generativeai
