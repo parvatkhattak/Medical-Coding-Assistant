@@ -38,8 +38,6 @@ st.markdown("""
     font-size: clamp(2.8rem, 6vw, 4rem);  /* Bigger font */
     font-weight: 800;
     background: linear-gradient(135deg, #4fc3f7 0%, #03a9f4 50%, #0288d1 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
     text-align: center;
     margin-bottom: 2rem;
     letter-spacing: -0.03em;
