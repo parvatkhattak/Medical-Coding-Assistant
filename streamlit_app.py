@@ -413,7 +413,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Configuration
-FASTAPI_URL = "http://localhost:8000"
+FASTAPI_URL = "https://chatbot-vl3b.onrender.com"
 
 # Document groups info (simplified)
 DOCUMENT_GROUPS = {
