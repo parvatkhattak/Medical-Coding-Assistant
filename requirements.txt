@@ -50,7 +50,7 @@ openpyxl==3.1.5
 orjson==3.10.16
 packaging==23.2
 parso==0.8.4
-pillow==11.2.1
+pillow==9.5.0
 platformdirs==4.3.7
 portalocker==2.10.1
 prompt_toolkit==3.0.51
