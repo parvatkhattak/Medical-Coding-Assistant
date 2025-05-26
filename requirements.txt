@@ -67,7 +67,6 @@ PyPDF2==3.0.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
 pytz==2025.2
-pywin32==310
 PyYAML==6.0.2
 pyzmq==26.4.0
 qdrant-client==1.14.1
