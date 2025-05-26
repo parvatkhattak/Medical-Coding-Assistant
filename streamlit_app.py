@@ -34,18 +34,19 @@ st.markdown("""
         max-width: 1200px;
     }
     
-    /* Header styling */
-    .main-header {
-        font-size: clamp(1.8rem, 5vw, 2.8rem);
-        font-weight: 700;
-        background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 50%, #03a9f4 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-align: center;
-        margin-bottom: 1.5rem;
-        letter-spacing: -0.02em;
-        line-height: 1.2;
-    }
+.main-header {
+    font-size: clamp(2.8rem, 6vw, 4rem);  /* Bigger font */
+    font-weight: 800;
+    background: linear-gradient(135deg, #4fc3f7 0%, #03a9f4 50%, #0288d1 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-align: center;
+    margin-bottom: 2rem;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+    text-shadow: 2px 2px 8px rgba(0,0,0,0.3);  /* Add subtle shadow */
+}
+
     
     .subtitle {
         text-align: center;
