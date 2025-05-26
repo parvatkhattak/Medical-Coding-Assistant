@@ -45,21 +45,25 @@ COLLECTION_NAME = "Medical_Coder"
 # Document groups matching your process_documents.py structure
 DOCUMENT_GROUPS = {
     "ICD_CODES": {
+        "collection":"Medical_Coder",
         "files": ["RAG1.pdf", "RAG1_1.xlsx"],
         "description": "ICD-10 Coding Guidelines and References",
         "priority": 1
     },
     "CPT_PROCEDURES": {
+        "collection":"Medical_Coder",
         "files": ["RAG2.xlsx", "RAG2_1.pdf", "RAG2_2.pdf", "RAG2_3.pdf"],
         "description": "CPT Procedure Codes and Documentation",
         "priority": 2
     },
     "MEDICAL_TERMINOLOGY": {
+        "collection":"Medical_Coder",
         "files": ["RAG3.csv"],
         "description": "Medical Terminology and Definitions",
         "priority": 3
     }
 }
+
 
 # Initialize clients
 qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
