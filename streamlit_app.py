@@ -115,56 +115,6 @@ st.markdown("""
         font-size: clamp(0.8rem, 2.5vw, 0.9rem);
     }
     
-    /* Source information */
-    .sources-container {
-        background: rgba(30, 41, 59, 0.8);
-        border-radius: 8px;
-        padding: 0.8rem;
-        margin-top: 1rem;
-        border: 1px solid rgba(148, 163, 184, 0.2);
-    }
-    
-    .source-item {
-        background: rgba(51, 65, 85, 0.6);
-        padding: 0.6rem;
-        border-radius: 6px;
-        margin: 0.4rem 0;
-        border-left: 3px solid #3b82f6;
-        font-size: clamp(0.75rem, 2vw, 0.9rem);
-        word-wrap: break-word;
-    }
-    
-    .source-item strong {
-        color: #cbd5e1;
-    }
-    
-    /* Priority badges */
-    .priority-badge {
-        display: inline-block;
-        padding: 0.2rem 0.4rem;
-        border-radius: 6px;
-        font-size: clamp(0.65rem, 1.8vw, 0.75rem);
-        font-weight: 600;
-        margin-left: 0.3rem;
-        white-space: nowrap;
-    }
-    
-    .priority-1 { 
-        background: rgba(16, 185, 129, 0.2); 
-        color: #10b981; 
-        border: 1px solid rgba(16, 185, 129, 0.3);
-    }
-    .priority-2 { 
-        background: rgba(245, 158, 11, 0.2); 
-        color: #f59e0b; 
-        border: 1px solid rgba(245, 158, 11, 0.3);
-    }
-    .priority-3 { 
-        background: rgba(239, 68, 68, 0.2); 
-        color: #ef4444; 
-        border: 1px solid rgba(239, 68, 68, 0.3);
-    }
-    
     /* Sidebar styling */
     .css-1d391kg {
         background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
@@ -245,22 +195,6 @@ st.markdown("""
         color: #ffffff !important;
     }
     
-    /* Expander styling */
-    .streamlit-expanderHeader {
-        background: rgba(30, 41, 59, 0.6) !important;
-        border-radius: 8px !important;
-        color: #e2e8f0 !important;
-        font-weight: 500 !important;
-        font-size: clamp(0.8rem, 2.2vw, 0.9rem) !important;
-        padding: 0.75rem !important;
-    }
-    
-    .streamlit-expanderContent {
-        background: rgba(15, 23, 42, 0.8) !important;
-        border-radius: 0 0 8px 8px !important;
-        padding: 0.5rem !important;
-    }
-    
     /* Metrics */
     .metric-container {
         background: rgba(30, 41, 59, 0.6);
@@ -326,21 +260,6 @@ st.markdown("""
         .subtitle {
             margin-bottom: 1.5rem;
             padding: 0 0.5rem;
-        }
-        
-        .priority-badge {
-            display: block;
-            margin: 0.2rem 0;
-            margin-left: 0;
-        }
-        
-        .source-item {
-            padding: 0.5rem;
-            margin: 0.3rem 0;
-        }
-        
-        .sources-container {
-            padding: 0.6rem;
         }
         
         /* Sidebar adjustments for mobile */
@@ -414,13 +333,6 @@ st.markdown("""
 # Configuration
 FASTAPI_URL = "https://chatbot-vl3b.onrender.com"
 
-# Document groups info (simplified)
-DOCUMENT_GROUPS = {
-    "ICD_CODES": {"name": "ICD-10 Guidelines", "priority": 1},
-    "CPT_PROCEDURES": {"name": "CPT Procedures", "priority": 2},
-    "MEDICAL_TERMINOLOGY": {"name": "Medical Terminology", "priority": 3}
-}
-
 # Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -448,28 +360,23 @@ def call_chatbot_api(question: str) -> Dict[str, Any]:
             return response.json()
         elif response.status_code == 429:
             return {
-                "answer": "⚠️ Rate limit exceeded. Please wait before trying again.",
-                "sources": []
+                "answer": "⚠️ Rate limit exceeded. Please wait before trying again."
             }
         else:
             return {
-                "answer": f"❌ Server error (Status: {response.status_code})",
-                "sources": []
+                "answer": f"❌ Server error (Status: {response.status_code})"
             }
     except requests.exceptions.ConnectionError:
         return {
-            "answer": "❌ Cannot connect to server. Please ensure the FastAPI server is running.",
-            "sources": []
+            "answer": "❌ Cannot connect to server. Please ensure the FastAPI server is running."
         }
     except requests.exceptions.Timeout:
         return {
-            "answer": "⏱️ Request timed out. Please try again.",
-            "sources": []
+            "answer": "⏱️ Request timed out. Please try again."
         }
     except Exception as e:
         return {
-            "answer": f"❌ Error: {str(e)}",
-            "sources": []
+            "answer": f"❌ Error: {str(e)}"
         }
 
 def check_api_health() -> Dict[str, str]:
@@ -482,32 +389,6 @@ def check_api_health() -> Dict[str, str]:
             return {"status": "error", "message": f"HTTP {response.status_code}"}
     except:
         return {"status": "offline", "message": "Cannot connect to API"}
-
-def display_sources(sources: List[Dict[str, Any]]):
-    """Display source information"""
-    if not sources:
-        return
-        
-    with st.expander(f"📚 Sources ({len(sources)} found)", expanded=False):
-        st.markdown('<div class="sources-container">', unsafe_allow_html=True)
-        
-        for i, source in enumerate(sources):
-            group = source.get('source_group', 'UNKNOWN')
-            group_name = DOCUMENT_GROUPS.get(group, {}).get('name', group)
-            priority = source.get('source_priority', 99)
-            score = source.get('score', 0)
-            file_name = source.get('file_name', 'Unknown')
-            
-            st.markdown(f"""
-            <div class="source-item">
-                <strong>{group_name}</strong>
-                <span class="priority-badge priority-{priority}">Priority {priority}</span><br>
-                <small><strong>File:</strong> {file_name}</small><br>
-                <small><strong>Relevance:</strong> {score:.3f}</small>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
 
 def display_chat_message(message: Dict[str, Any], is_user: bool = False):
     """Display a chat message with modern styling"""
@@ -525,16 +406,12 @@ def display_chat_message(message: Dict[str, Any], is_user: bool = False):
             <div class="chat-content">{message['content']}</div>
         </div>
         """, unsafe_allow_html=True)
-        
-        # Display sources if available
-        if message.get('sources'):
-            display_sources(message['sources'])
 
 def main():
     # Header
     st.markdown("""
     <h1 class="main-header">🏥 Medical Coding Assistant</h1>
-    <p class="subtitle">AI-powered ICD-10 and CPT coding guidance with comprehensive source documentation</p>
+    <p class="subtitle">AI-powered ICD-10 and CPT coding guidance for medical professionals</p>
     """, unsafe_allow_html=True)
     
     # Check API health
@@ -556,13 +433,6 @@ def main():
         st.markdown("## 💬 Session Info")
         st.info(f"**Messages:** {len(st.session_state.messages)}")
         st.info(f"**Session ID:** `{st.session_state.chat_id[:8]}...`")
-        
-        # Knowledge sources
-        st.markdown("## 📁 Knowledge Sources")
-        for group_key, group_info in DOCUMENT_GROUPS.items():
-            priority = group_info["priority"]
-            name = group_info["name"]
-            st.markdown(f"• **{name}** (Priority {priority})")
         
         # Quick actions
         st.markdown("## ⚡ Quick Start")
@@ -591,7 +461,7 @@ def main():
         st.markdown("## 📋 How to Use")
         st.markdown("""
         1. **Ask Questions**: Type medical coding questions below
-        2. **Review Sources**: Check the source references for each answer
+        2. **Get Answers**: Receive AI-powered coding guidance
         3. **Follow Up**: Ask clarifying questions as needed
         
         **Example Questions:**
@@ -623,8 +493,7 @@ def main():
             response = call_chatbot_api(question)
             assistant_message = {
                 "role": "assistant",
-                "content": response["answer"],
-                "sources": response.get("sources", [])
+                "content": response["answer"]
             }
             st.session_state.messages.append(assistant_message)
             display_chat_message(assistant_message, is_user=False)
@@ -643,8 +512,7 @@ def main():
             response = call_chatbot_api(prompt)
             assistant_message = {
                 "role": "assistant",
-                "content": response["answer"],
-                "sources": response.get("sources", [])
+                "content": response["answer"]
             }
             st.session_state.messages.append(assistant_message)
             display_chat_message(assistant_message, is_user=False)
@@ -652,7 +520,7 @@ def main():
     # Footer
     st.markdown("""
     <div class="footer">
-        <p>🏥 Medical Coding Assistant | Powered by Gemini AI & Qdrant Vector Database</p>
+        <p>🏥 Medical Coding Assistant | Powered by AI Technology</p>
         <p>⚠️ For educational purposes only. Always consult official coding guidelines for clinical use.</p>
     </div>
     """, unsafe_allow_html=True)
