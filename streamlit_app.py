@@ -407,6 +407,34 @@ def display_chat_message(message: Dict[str, Any], is_user: bool = False):
         </div>
         """, unsafe_allow_html=True)
 
+def safe_rerun():
+    """Safely handle page rerun across different Streamlit versions"""
+    try:
+        # Try the new method first (Streamlit >= 1.27.0)
+        st.rerun()
+    except AttributeError:
+        try:
+            # Try the experimental method (older versions)
+            st.experimental_rerun()
+        except AttributeError:
+            # If neither works, use a workaround with session state
+            st.session_state.force_rerun = True
+
+def process_sample_question(question: str):
+    """Process a sample question and get AI response"""
+    # Add user message
+    user_message = {"role": "user", "content": question}
+    st.session_state.messages.append(user_message)
+    
+    # Get AI response
+    with st.spinner("🔍 Analyzing your question..."):
+        response = call_chatbot_api(question)
+        assistant_message = {
+            "role": "assistant", 
+            "content": response["answer"]
+        }
+        st.session_state.messages.append(assistant_message)
+
 def main():
     # Header
     st.markdown("""
@@ -448,10 +476,10 @@ def main():
         for i, question in enumerate(sample_questions):
             if st.button(question, key=f"sample_{i}", disabled=not api_online, 
                         help="Click to ask this question"):
-                st.session_state.temp_question = question
-                st.rerun()
-        
-# Chat management
+                process_sample_question(question)
+                safe_rerun()
+
+        # Chat management
         st.markdown("## 💬 Chat Management")
         
         col1, col2 = st.columns(2)
@@ -459,12 +487,12 @@ def main():
             if st.button("🆕 New Chat", type="primary", help="Start a new conversation"):
                 st.session_state.messages = []
                 st.session_state.chat_id = str(uuid.uuid4())
-                st.rerun()
+                safe_rerun()
         
         with col2:
             if st.button("🗑️ Clear Chat", type="secondary", help="Clear current conversation"):
                 st.session_state.messages = []
-                st.rerun()
+                safe_rerun()
         
         # Instructions
         st.markdown("## 📋 How to Use")
@@ -486,26 +514,6 @@ def main():
             display_chat_message(message, is_user=True)
         else:
             display_chat_message(message, is_user=False)
-    
-    # Handle sample questions
-    if hasattr(st.session_state, 'temp_question'):
-        question = st.session_state.temp_question
-        delattr(st.session_state, 'temp_question')
-        
-        # Add user message
-        user_message = {"role": "user", "content": question}
-        st.session_state.messages.append(user_message)
-        display_chat_message(user_message, is_user=True)
-        
-        # Get AI response
-        with st.spinner("🔍 Analyzing your question..."):
-            response = call_chatbot_api(question)
-            assistant_message = {
-                "role": "assistant",
-                "content": response["answer"]
-            }
-            st.session_state.messages.append(assistant_message)
-            display_chat_message(assistant_message, is_user=False)
     
     # Chat input
     placeholder_text = "Ask me about medical coding..." if api_online else "API server offline"
