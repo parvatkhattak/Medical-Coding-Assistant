@@ -451,11 +451,20 @@ def main():
                 st.session_state.temp_question = question
                 st.rerun()
         
-        # Clear chat
-        if st.button("🗑️ Clear Chat", type="secondary"):
-            st.session_state.messages = []
-            st.session_state.chat_id = str(uuid.uuid4())
-            st.rerun()
+# Chat management
+        st.markdown("## 💬 Chat Management")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🆕 New Chat", type="primary", help="Start a new conversation"):
+                st.session_state.messages = []
+                st.session_state.chat_id = str(uuid.uuid4())
+                st.rerun()
+        
+        with col2:
+            if st.button("🗑️ Clear Chat", type="secondary", help="Clear current conversation"):
+                st.session_state.messages = []
+                st.rerun()
         
         # Instructions
         st.markdown("## 📋 How to Use")
