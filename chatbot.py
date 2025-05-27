@@ -2,14 +2,11 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 import json
-import time
-from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 import nltk
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
-from qdrant_client.http import models
 from dotenv import load_dotenv
 import google.generativeai as genai
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,11 +35,10 @@ logger = logging.getLogger(__name__)
 
 # Constants
 QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_API_KEY = os.getenv("QDRANT_api_KEY")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-COLLECTION_NAME = "Medical_Coder"
 
-# Document groups matching your process_documents.py structure
+# Document groups and their collection names
 DOCUMENT_GROUPS = {
     "ICD_CODES": {
         "collection":"Medical_Coder",
@@ -64,88 +60,65 @@ DOCUMENT_GROUPS = {
     }
 }
 
-
 # Initialize clients
 qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
 # Initialize Gemini client
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Rate limiting tracker
-class RateLimitTracker:
-    def __init__(self):
-        self.requests = []
-        self.daily_requests = 0
-        self.daily_reset = datetime.now() + timedelta(days=1)
-        
-    def can_make_request(self):
-        now = datetime.now()
-        
-        # Reset daily counter if needed
-        if now > self.daily_reset:
-            self.daily_requests = 0
-            self.daily_reset = now + timedelta(days=1)
-        
-        # Remove old requests (older than 1 minute)
-        self.requests = [req_time for req_time in self.requests if now - req_time < timedelta(minutes=1)]
-        
-        # Check limits (conservative estimates for free tier)
-        if self.daily_requests >= 500:  # Conservative daily limit
-            return False, "Daily quota exceeded"
-        if len(self.requests) >= 15:  # Conservative per-minute limit
-            return False, "Per-minute quota exceeded"
-        
-        return True, "OK"
-    
-    def record_request(self):
-        self.requests.append(datetime.now())
-        self.daily_requests += 1
+def get_gemini_embedding(text: str) -> List[float]:
+    """Generate embedding using Gemini's text-embedding model"""
+    try:
+        result = genai.embed_content(
+            model="models/text-embedding-004",
+            content=text,
+            task_type="retrieval_query"
+        )
+        return result['embedding']
+    except Exception as e:
+        logger.error(f"Error generating Gemini embedding: {e}")
+        # Fallback: return a zero vector of appropriate dimension (768 for text-embedding-004)
+        return [0.0] * 768
 
-rate_limiter = RateLimitTracker()
-
-class GeminiEmbeddings:
-    """Wrapper for Gemini embeddings with enhanced error handling"""
-    
-    def __init__(self, model_name: str = 'models/text-embedding-004'):
-        self.model_name = model_name
-        self.rate_limit_delay = 1.0  # Increased delay
+def generate_gemini_response(messages: List[Dict[str, str]], temperature: float = 0.7, max_tokens: int = 1024) -> str:
+    """Generate response using Gemini Flash 2.0"""
+    try:
+        # Initialize the model
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
-    def embed_query(self, text: str) -> List[float]:
-        """Embed a query using Gemini API with rate limiting"""
-        can_request, reason = rate_limiter.can_make_request()
-        if not can_request:
-            logger.warning(f"Rate limit check failed: {reason}")
-            return [0.0] * 768  # Return zero vector as fallback
+        # Convert messages to Gemini format
+        # Gemini expects a conversation format, so we'll combine system and user messages
+        system_message = ""
+        conversation_parts = []
         
-        max_retries = 2  # Reduced retries
-        for attempt in range(max_retries):
-            try:
-                result = genai.embed_content(
-                    model=self.model_name,
-                    content=text,
-                    task_type="retrieval_query"
-                )
-                rate_limiter.record_request()
-                time.sleep(self.rate_limit_delay)
-                return result['embedding']
-            except Exception as e:
-                error_msg = str(e)
-                if "429" in error_msg or "quota" in error_msg.lower():
-                    logger.error(f"API quota exceeded: {e}")
-                    return [0.0] * 768  # Return zero vector immediately on quota error
-                elif attempt < max_retries - 1:
-                    wait_time = 2 ** attempt
-                    logger.warning(f"Embedding attempt {attempt + 1} failed, retrying in {wait_time}s: {e}")
-                    time.sleep(wait_time)
-                else:
-                    logger.error(f"Failed to embed query after {max_retries} attempts: {e}")
-                    return [0.0] * 768
-
-# Initialize embedding client
-embeddings_client = GeminiEmbeddings()
+        for message in messages:
+            if message["role"] == "system":
+                system_message = message["content"]
+            elif message["role"] == "user":
+                conversation_parts.append(f"User: {message['content']}")
+            elif message["role"] == "assistant":
+                conversation_parts.append(f"Assistant: {message['content']}")
+        
+        # Combine system message with conversation
+        full_prompt = f"{system_message}\n\n" + "\n\n".join(conversation_parts)
+        
+        # Generate response
+        response = model.generate_content(
+            full_prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            )
+        )
+        
+        return response.text
+        
+    except Exception as e:
+        logger.error(f"Error generating Gemini response: {e}")
+        return "I'm sorry, I encountered an error while generating your response. Please try again."
 
 # Initialize FastAPI app
-app = FastAPI(title="Multi-Source RAG Medical Coding Chatbot with Gemini")
+app = FastAPI(title="Multi-Source RAG Medical Coding Chatbot")
 
 # Add CORS middleware
 app.add_middleware(
@@ -160,21 +133,18 @@ class ChatRequest(BaseModel):
     question: str
     chat_id: str
     user_id: str = "default_user"
-    show_retrieved_data: bool = False
 
 class ChatResponse(BaseModel):
     answer: str
     sources: List[Dict[str, Any]] = []
     structured_query: Optional[Dict[str, Any]] = None
-    retrieved_data: Optional[List[Dict[str, Any]]] = None
-    warning: Optional[str] = None  # New field for warnings
 
 def is_medical_query(question: str) -> bool:
     """Determine if the question is related to medical coding"""
     medical_keywords = [
         'icd', 'code', 'diagnosis', 'medical', 'condition', 'disease', 'symptom',
         'guideline', 'documentation', 'requirement', 'coding', 'clinical', 'health',
-        'patient', 'treatment', 'procedure', 'assessment', 'record', 'chart', 'cpt'
+        'patient', 'treatment', 'procedure', 'assessment', 'record', 'chart'
     ]
     
     question_lower = question.lower()
@@ -186,80 +156,61 @@ def is_medical_query(question: str) -> bool:
     
     return any(keyword in question_lower for keyword in medical_keywords)
 
-def structure_user_input_fallback(question: str) -> Dict[str, Any]:
-    """Fallback method for structuring user input without Gemini"""
-    # Simple keyword extraction and structuring
-    question_lower = question.lower()
-    
-    # Determine intent based on keywords
-    intent = "Code Lookup"
-    if any(word in question_lower for word in ['guideline', 'rule', 'how to']):
-        intent = "Guideline Lookup"
-    elif any(word in question_lower for word in ['include', 'exclude']):
-        intent = "Inclusion/Exclusion Query"
-    elif any(word in question_lower for word in ['vs', 'versus', 'compare', 'difference']):
-        intent = "Comparison"
-    
-    # Extract potential codes (simple regex would be better)
-    import re
-    code_patterns = re.findall(r'[A-Z]\d{2}(?:\.\d+)?', question)
-    
-    return {
-        "query": question,
-        "intent": intent,
-        "search_query": question,
-        "filters": {
-            "chapter": None,
-            "section": None,
-            "code": code_patterns[0] if code_patterns else None,
-            "keywords": remove_stopwords(question),
-            "patient": {"age": None, "gender": None},
-            "include": [],
-            "exclude": []
-        }
-    }
-
-def structure_user_input_with_gemini(question: str) -> Dict[str, Any]:
-    """Transform user query into structured format using Gemini with fallback"""
-    # Check rate limits first
-    can_request, reason = rate_limiter.can_make_request()
-    if not can_request:
-        logger.warning(f"Skipping Gemini structuring due to rate limits: {reason}")
-        return structure_user_input_fallback(question)
-    
+def structure_user_input(question: str) -> Dict[str, Any]:
+    """Transform user query into structured format using chain-of-thought reasoning"""
     try:
-        system_prompt = """You are an expert medical coding librarian. Return ONLY a JSON object:
+        system_prompt = """You are an expert medical coding librarian and ICD-10–CM specialist. When given a user question about ICD-10 coding, follow this reasoning framework before producing output:
+
+**STEP 1: Clarify Intent**
+- "I observe the user's question: '{user_input}'."
+- "Which category best fits?"
+  • Code Lookup (find specific diagnosis code)
+  • Guideline Lookup (rules—sequencing, code first)
+  • Inclusion/Exclusion Query
+  • Comparison (differences between codes)
+  • Clinical Scenario (PDx vs SDx, E/M level)
+  • Other
+- "I conclude the intent is: ."
+
+**STEP 2: Identify Key Entities & Context**
+- "I note any explicit terms: body system/chapter, section/category, explicit codes."
+- "I infer implicit context: patient age, gender, setting, severity, laterality, acute vs chronic."
+- "Extracted metadata: {chapter}, {section}, {patient_context}, {qualifiers}."
+
+**STEP 3: Enrich Query for Retrieval**
+- "I expand abbreviations and add synonyms (e.g., 'MI' → 'myocardial infarction')."
+- "I append relevant guideline references (e.g., 'use additional code for…')."
+- "I include inclusion/exclusion terms based on official ICD-10–CM notes."
+
+**STEP 4: Construct JSON Filters Object**
+- "Now I assemble the final JSON with keys: `query`, `intent`, `search_query`, and `filters` (chapter, section, code, keywords, patient, include, exclude)."
+
+**Deliverable:** Output **only** the JSON object in this format:
 
 {
-  "query": "Rewritten search query",
-  "intent": "Code Lookup|Guideline Lookup|Inclusion/Exclusion Query|Comparison|Clinical Scenario|Other",
-  "search_query": "expanded query with medical terms",
+  "query": "Rewritten Search Query: ...",
+  "intent": "Code Lookup",
+  "search_query": "expanded natural-language query",
   "filters": {
+    "chapter": "chapter name or null",
+    "section": "section name or null", 
     "keywords": ["term1", "term2"],
-    "code": "explicit code or null"
+    "patient": {"age": "adult/pediatric/null", "gender": "male/female/null"},
+    "include": ["include term1"],
+    "exclude": ["exclude term1"]
   }
-}
+}"""
 
-Keep it concise. Return ONLY the JSON."""
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"User question: {question}"}
+        ]
 
-        # Use Gemini Flash instead of Pro for better rate limits
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        prompt = f"{system_prompt}\n\nUser question: {question}"
-        
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.2,
-                max_output_tokens=512,
-            )
-        )
-        
-        rate_limiter.record_request()
-        response_text = response.text
+        response_text = generate_gemini_response(messages, temperature=0.7, max_tokens=1024)
         
         # Try to parse JSON from response
         try:
+            # Find JSON in the response
             json_start = response_text.find('{')
             json_end = response_text.rfind('}') + 1
             if json_start != -1 and json_end != -1:
@@ -269,210 +220,188 @@ Keep it concise. Return ONLY the JSON."""
         except json.JSONDecodeError:
             logger.warning("Failed to parse structured query JSON, using fallback")
         
-        return structure_user_input_fallback(question)
+        # Fallback structure
+        return {
+            "query": question,
+            "intent": "Code Lookup",
+            "search_query": question,
+            "filters": {
+                "chapter": None,
+                "section": None,
+                "code": None,
+                "keywords": remove_stopwords(question),
+                "patient": {"age": None, "gender": None},
+                "include": [],
+                "exclude": []
+            }
+        }
 
     except Exception as e:
-        error_msg = str(e)
-        if "429" in error_msg or "quota" in error_msg.lower():
-            logger.error(f"Gemini quota exceeded for structuring: {e}")
-        else:
-            logger.error(f"Error structuring user input with Gemini: {e}")
-        return structure_user_input_fallback(question)
+        logger.error(f"Error structuring user input: {e}")
+        # Return fallback structure
+        return {
+            "query": question,
+            "intent": "Code Lookup", 
+            "search_query": question,
+            "filters": {"keywords": remove_stopwords(question)}
+        }
 
-def search_unified_collection(structured_query: Dict[str, Any], limit: int = 10) -> List[Dict[str, Any]]:
-    """Search the unified Medical_Coder collection with filtering"""
-    try:
-        # Extract search terms
-        search_query = structured_query.get("search_query", "")
-        keywords = structured_query.get("filters", {}).get("keywords", [])
-        
-        # Combine search terms
-        combined_query = f"{search_query} {' '.join(keywords)}" if keywords else search_query
-        
-        # Generate embedding
-        query_embedding = embeddings_client.embed_query(combined_query)
-        
-        # Check if we got a valid embedding
-        if all(x == 0.0 for x in query_embedding):
-            logger.warning("Received zero vector embedding, search may be less accurate")
-        
-        # Build filters based on structured query
-        filter_conditions = []
-        
-        # Filter by document group if we can infer it from the query
-        if any(term in combined_query.lower() for term in ['guideline', 'rule', 'sequencing']):
-            filter_conditions.append(
-                models.FieldCondition(
-                    key="metadata.doc_group",
-                    match=models.MatchValue(value="ICD_CODES")
-                )
-            )
-        elif any(term in combined_query.lower() for term in ['procedure', 'cpt']):
-            filter_conditions.append(
-                models.FieldCondition(
-                    key="metadata.doc_group",
-                    match=models.MatchValue(value="CPT_PROCEDURES")
-                )
-            )
-        elif any(term in combined_query.lower() for term in ['terminology', 'definition']):
-            filter_conditions.append(
-                models.FieldCondition(
-                    key="metadata.doc_group",
-                    match=models.MatchValue(value="MEDICAL_TERMINOLOGY")
-                )
-            )
-        
-        # Create search filter
-        search_filter = models.Filter(must=filter_conditions) if filter_conditions else None
-        
-        # Search the collection
-        search_results = qdrant_client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_embedding,
-            limit=limit,
-            query_filter=search_filter
-        )
-        
-        # Format results
-        results = []
-        for result in search_results:
-            metadata = result.payload.get("metadata", {})
-            results.append({
-                "text": result.payload.get("text", ""),
-                "metadata": metadata,
-                "score": result.score,
-                "source_group": metadata.get("doc_group", "UNKNOWN"),
-                "source_priority": metadata.get("group_priority", 99),
-                "source_description": DOCUMENT_GROUPS.get(metadata.get("doc_group", ""), {}).get("description", "Unknown source"),
-                "file_name": metadata.get("file_name", "Unknown"),
-                "chunk_index": metadata.get("chunk_index", 0)
-            })
-        
-        # Sort by priority and score
-        results.sort(key=lambda x: (x["source_priority"], -x["score"]))
-        
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error searching unified collection: {e}")
-        return []
-
-def generate_response_with_gemini(user_question: str, structured_query: Dict[str, Any], 
-                                rag_results: List[Dict[str, Any]], conversation_history: List[Dict[str, str]] = None) -> tuple[str, Optional[str]]:
-    """Generate response using Gemini with RAG data, returns (response, warning)"""
-    # Check rate limits first
-    can_request, reason = rate_limiter.can_make_request()
-    if not can_request:
-        warning = f"API quota limitations active: {reason}. Using fallback response."
-        return generate_fallback_response(user_question, rag_results), warning
+def search_multi_source_rag(structured_query: Dict[str, Any], limit_per_source: int = 3) -> List[Dict[str, Any]]:
+    """Search across multiple RAG sources with prioritization using Gemini embeddings"""
+    all_results = []
     
+    # Extract search terms
+    search_query = structured_query.get("search_query", "")
+    keywords = structured_query.get("filters", {}).get("keywords", [])
+    
+    # Combine search terms
+    combined_query = f"{search_query} {' '.join(keywords)}" if keywords else search_query
+    
+    # Generate embedding using Gemini
+    query_embedding = get_gemini_embedding(combined_query)
+    
+    # Search each group's collection
+    for group_name, group_info in DOCUMENT_GROUPS.items():
+        try:
+            collection_name = group_info["collection"]
+            
+            # Search this collection
+            search_result = qdrant_client.search(
+                collection_name=collection_name,
+                query_vector=query_embedding,
+                limit=limit_per_source
+            )
+            
+            # Add results with source information
+            for result in search_result:
+                all_results.append({
+                    "text": result.payload.get("text", ""),
+                    "metadata": result.payload.get("metadata", {}),
+                    "score": result.score,
+                    "source_group": group_name,
+                    "source_priority": group_info["priority"],
+                    "source_description": group_info["description"]
+                })
+                
+        except Exception as e:
+            logger.warning(f"Error searching {group_name}: {e}")
+            continue
+    
+    # Sort by priority (lower number = higher priority) then by score
+    all_results.sort(key=lambda x: (x["source_priority"], -x["score"]))
+    
+    return all_results
+
+def generate_rag_response(user_question: str, structured_query: Dict[str, Any], rag_results: List[Dict[str, Any]], conversation_history: List[Dict[str, str]] = None) -> str:
+    """Generate response using chain-of-thought reasoning with RAG data"""
     try:
-        # Prepare RAG content with source tags (limit content to avoid token limits)
+        # Prepare RAG content with source tags
         rag_content = ""
         source_list = []
         
-        for i, result in enumerate(rag_results[:5]):  # Limit to top 5 results
+        for i, result in enumerate(rag_results):
             source_tag = f"[{result['source_group']}-{i+1}]"
-            source_list.append(f"{source_tag}: {result['source_description']} (Score: {result['score']:.3f})")
-            # Limit text length to avoid token limits
-            text_snippet = result['text'][:800] + "..." if len(result['text']) > 800 else result['text']
-            rag_content += f"\n{source_tag} {text_snippet}\n"
+            source_list.append(f"{source_tag}: {result['source_description']}")
+            rag_content += f"\n{source_tag} {result['text']}\n"
         
-        system_prompt = f"""You are a medical coding assistant. Based on the retrieved information, provide a comprehensive answer.
+        system_prompt = """You are a certified ICD-10–CM coding assistant. You have three inputs:
+1. User's original query: '{user_input}'
+2. Retrieved RAG content (with source tags): {rag_results}
+3. Source identifiers for each snippet: {source_list}
 
-User's question: {user_question}
+Before writing your answer, follow this chain-of-thought:
 
-Retrieved information:
+**STEP 1: Organize Retrieved Data**
+- "I group the retrieved segments by source: GROUP1, GROUP2, GROUP3."
+- "I note any overlapping or conflicting information."
+
+**STEP 2: Apply Source Prioritization** 
+- "I select answers from the highest-priority source available, in order: GROUP1 > GROUP2 > GROUP3."
+- "If two sources at the same level conflict, I choose the most specific guideline language."
+
+**STEP 3: Reason Through Code Selection**
+- "I determine the Primary Diagnosis Code(s) that best match the clinical context."
+- "I identify any Secondary Code(s) based on comorbidities, external causes, or additional factors."
+-"If no specificity is provided, consider it as unspecified."
+
+**STEP 4: Draft Response Outline**
+- "I will list all relevant ICD-10–CM codes with descriptions."
+- "I will provide a brief rationale (1–2 sentences) for each code, citing guideline notes or context."
+- "If key information is missing, I formulate one concise clarification question."
+
+**STEP 5: Finalize Structured Output**
+- "I assemble the final formatted answer with codes, rationales, clarification (if needed), and a disclaimer."
+
+Now produce the answer in the format below, and include **only** the specified sections (do not include your reasoning steps):
+
+**ICD-10–CM Codes:**
+- CODE – Description
+- CODE – Description
+
+**Rationale:**
+- CODE: Explanation (reference guideline, includes/excludes, or context match)
+- CODE: Explanation
+
+**Clarification (if needed):**
+[Your single question here]
+
+**Disclaimer:** This answer is for informational purposes only. Please confirm with the latest ICD-10–CM guidelines or a certified medical coder."""
+
+        user_prompt = f"""User's original query: {user_question}
+
+Retrieved RAG content:
 {rag_content}
 
-Provide a structured answer with relevant codes, guidelines, and clinical context. Keep response concise but comprehensive."""
+Source identifiers:
+{chr(10).join(source_list)}
 
-        # Use Gemini Flash for better rate limits
-        model = genai.GenerativeModel('gemini-1.5-flash')
+Structured query context: {json.dumps(structured_query, indent=2)}"""
+
+        # Prepare messages
+        messages = [{"role": "system", "content": system_prompt}]
         
-        response = model.generate_content(
-            system_prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.3,
-                max_output_tokens=1024,  # Reduced token limit
-            )
-        )
+        # Add conversation history if available
+        if conversation_history:
+            messages.extend(conversation_history[-6:])  # Last 3 exchanges
         
-        rate_limiter.record_request()
-        return response.text, None
+        messages.append({"role": "user", "content": user_prompt})
+
+        return generate_gemini_response(messages, temperature=0.3, max_tokens=1024)
 
     except Exception as e:
-        error_msg = str(e)
-        if "429" in error_msg or "quota" in error_msg.lower():
-            warning = "API quota exceeded. Using fallback response based on retrieved data."
-            logger.error(f"Gemini quota exceeded for response generation: {e}")
-            return generate_fallback_response(user_question, rag_results), warning
-        else:
-            logger.error(f"Error generating response with Gemini: {e}")
-            return generate_fallback_response(user_question, rag_results), "API error occurred. Using fallback response."
+        logger.error(f"Error generating RAG response: {e}")
+        return "I'm sorry, I encountered an error while generating your answer. Please try again."
 
-def generate_fallback_response(user_question: str, rag_results: List[Dict[str, Any]]) -> str:
-    """Generate a fallback response when Gemini is unavailable"""
-    if not rag_results:
-        return "I'm sorry, I couldn't retrieve relevant information for your question. Please try rephrasing your query or check if it's related to medical coding."
-    
-    # Create a simple response based on retrieved data
-    response = f"Based on the retrieved medical coding information:\n\n"
-    
-    # Add top results
-    for i, result in enumerate(rag_results[:3]):
-        response += f"**Source {i+1} ({result['source_description']}):**\n"
-        text_snippet = result['text'][:400] + "..." if len(result['text']) > 400 else result['text']
-        response += f"{text_snippet}\n\n"
-    
-    response += "**Note:** This is a simplified response. For complete medical coding guidance, please consult the latest official coding manuals and guidelines."
-    
-    return response
-
-def generate_general_response_with_gemini(question: str, conversation_history: List[Dict[str, str]] = None) -> str:
-    """Generate response for non-medical queries using Gemini with fallback"""
-    # Check rate limits first
-    can_request, reason = rate_limiter.can_make_request()
-    if not can_request:
-        return "Hello! I'm a medical coding assistant specializing in ICD-10-CM and CPT coding. How can I help you with your medical coding questions today?"
-    
+def generate_general_response(question: str, conversation_history: List[Dict[str, str]] = None) -> str:
+    """Generate response for non-medical queries"""
     try:
-        system_prompt = """You are a friendly medical coding assistant. Respond helpfully to general queries and mention your medical coding specialty when appropriate. Keep responses brief."""
-
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        response = model.generate_content(
-            f"{system_prompt}\n\nUser: {question}",
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.7,
-                max_output_tokens=256,
-            )
+        system_prompt = (
+            "You are a friendly and professional medical coding assistant. "
+            "For general queries and greetings, provide helpful and welcoming responses. "
+            "If the conversation turns to medical coding topics, inform the user that you can help with ICD-10-CM coding questions."
         )
+
+        messages = [{"role": "system", "content": system_prompt}]
         
-        rate_limiter.record_request()
-        return response.text
+        if conversation_history:
+            messages.extend(conversation_history[-4:])  # Last 2 exchanges
+        
+        messages.append({"role": "user", "content": question})
+
+        return generate_gemini_response(messages, temperature=0.7, max_tokens=512)
 
     except Exception as e:
         logger.error(f"Error generating general response: {e}")
-        return "Hello! I'm here to help with your medical coding questions. How can I assist you today?"
+        return "Hello! I'm here to help with your ICD-10 coding questions. How can I assist you today?"
 
 async def get_conversation_history(chat_id: str, user_id: str, limit: int = 3):
-    """Retrieve conversation history from Supabase with error handling"""
+    """Retrieve conversation history from Supabase"""
     try:
-        # Try to import supabase
-        try:
-            from supabase import create_client, Client
-        except ImportError:
-            logger.warning("Supabase library not installed. Install with: pip install supabase")
-            return []
+        from supabase import create_client, Client
         
         supabase_url = os.getenv("SUPABASE_URL", "https://ilnnwhsktxtuwhkcbaup.supabase.co")
         supabase_key = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlsbm53aHNrdHh0dXdoa2NiYXVwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDU4MDkwMDEsImV4cCI6MjA2MTM4NTAwMX0.tL6-RiUQJykGwzss_mZ5-LUB6XbqeTu4ihs89jd7OKs")
         supabase_table = os.getenv("SUPABASE_TABLE_NAME", "chathistory")
-        
-        if not supabase_url or not supabase_key:
-            logger.warning("Supabase credentials not configured")
-            return []
         
         supabase: Client = create_client(supabase_url, supabase_key)
         
@@ -499,7 +428,7 @@ async def get_conversation_history(chat_id: str, user_id: str, limit: int = 3):
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Enhanced chat API endpoint with better error handling"""
+    """Enhanced chat API endpoint with multi-source RAG pipeline"""
     try:
         # Get conversation history
         conversation_history = []
@@ -508,54 +437,36 @@ async def chat(request: ChatRequest):
         
         # Check if it's a medical query
         if not is_medical_query(request.question):
-            answer = generate_general_response_with_gemini(request.question, conversation_history)
+            answer = generate_general_response(request.question, conversation_history)
             return ChatResponse(answer=answer, sources=[], structured_query=None)
         
         # Step 1: Structure the user input
-        structured_query = structure_user_input_with_gemini(request.question)
+        structured_query = structure_user_input(request.question)
         logger.info(f"Structured query: {structured_query}")
         
-        # Step 2: Search unified collection
-        rag_results = search_unified_collection(structured_query, limit=10)
-        logger.info(f"Retrieved {len(rag_results)} results from unified collection")
+        # Step 2: Multi-source RAG retrieval
+        rag_results = search_multi_source_rag(structured_query, limit_per_source=3)
+        logger.info(f"Retrieved {len(rag_results)} results from RAG sources")
         
-        # Step 3: Generate response
-        answer, warning = generate_response_with_gemini(request.question, structured_query, rag_results, conversation_history)
+        # Step 3: Generate response with chain-of-thought reasoning
+        answer = generate_rag_response(request.question, structured_query, rag_results, conversation_history)
         
         # Prepare sources information
         sources = []
         for result in rag_results:
+            metadata = result["metadata"]
             sources.append({
-                "file_name": result["file_name"],
+                "file_name": metadata.get("file_name", "Unknown"),
                 "source_group": result["source_group"],
                 "source_description": result["source_description"],
                 "source_priority": result["source_priority"],
-                "score": result["score"],
-                "chunk_index": result["chunk_index"]
+                "score": result["score"]
             })
-        
-        # Prepare retrieved data if requested
-        retrieved_data = None
-        if request.show_retrieved_data:
-            retrieved_data = []
-            for i, result in enumerate(rag_results):
-                retrieved_data.append({
-                    "index": i,
-                    "text": result["text"][:500] + "..." if len(result["text"]) > 500 else result["text"],
-                    "full_text": result["text"],
-                    "metadata": result["metadata"],
-                    "score": result["score"],
-                    "source_group": result["source_group"],
-                    "file_name": result["file_name"],
-                    "chunk_index": result["chunk_index"]
-                })
         
         return ChatResponse(
             answer=answer, 
             sources=sources,
-            structured_query=structured_query,
-            retrieved_data=retrieved_data,
-            warning=warning
+            structured_query=structured_query
         )
         
     except Exception as e:
@@ -563,89 +474,13 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             answer="I'm sorry, I encountered an error while processing your request. Please try again.",
             sources=[],
-            structured_query=None,
-            warning="System error occurred"
+            structured_query=None
         )
 
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
-    try:
-        # Test Qdrant connection
-        collections = qdrant_client.get_collections()
-        collection_exists = any(col.name == COLLECTION_NAME for col in collections.collections)
-        
-        # Test Gemini connection
-        can_request, reason = rate_limiter.can_make_request()
-        gemini_status = "available" if can_request else f"limited: {reason}"
-        
-        # Check Supabase availability
-        supabase_status = "available"
-        try:
-            from supabase import create_client
-            supabase_status = "installed"
-        except ImportError:
-            supabase_status = "not installed"
-        
-        return {
-            "status": "healthy", 
-            "collection_exists": collection_exists,
-            "collection_name": COLLECTION_NAME,
-            "groups": list(DOCUMENT_GROUPS.keys()),
-            "gemini_status": gemini_status,
-            "supabase_status": supabase_status,
-            "qdrant_url": QDRANT_URL,
-            "daily_requests_used": rate_limiter.daily_requests
-        }
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-@app.get("/api/collection/stats")
-async def get_collection_stats():
-    """Get statistics about the collection"""
-    try:
-        # Get total count
-        total_count = qdrant_client.count(collection_name=COLLECTION_NAME).count
-        
-        stats = {"total_chunks": total_count, "groups": {}}
-        
-        # Get count by document group
-        for group_name in DOCUMENT_GROUPS.keys():
-            count = qdrant_client.count(
-                collection_name=COLLECTION_NAME,
-                count_filter=models.Filter(
-                    must=[models.FieldCondition(
-                        key="metadata.doc_group",
-                        match=models.MatchValue(value=group_name)
-                    )]
-                )
-            ).count
-            stats["groups"][group_name] = count
-        
-        return stats
-        
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.post("/api/search")
-async def search_collection(query: str, limit: int = 5, group_filter: Optional[str] = None):
-    """Direct search endpoint for testing"""
-    try:
-        structured_query = structure_user_input_with_gemini(query)
-        results = search_unified_collection(structured_query, limit=limit)
-        
-        if group_filter:
-            results = [r for r in results if r["source_group"] == group_filter]
-        
-        return {
-            "query": query,
-            "structured_query": structured_query,
-            "results_count": len(results),
-            "results": results
-        }
-        
-    except Exception as e:
-        return {"error": str(e)}
+    return {"status": "healthy", "groups": list(DOCUMENT_GROUPS.keys())}
 
 if __name__ == "__main__":
     import uvicorn
