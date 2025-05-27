@@ -10,7 +10,7 @@ import time
 # Load environment variables
 load_dotenv()
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 
 print(f"Connecting to Qdrant at: {QDRANT_URL}")
