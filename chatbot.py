@@ -40,25 +40,26 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Document groups and their collection names
 DOCUMENT_GROUPS = {
-    "ICD_CODES": {
+    "Group 1": {
         "collection":"Medical_Coder",
         "files": ["RAG1.pdf", "RAG1_1.xlsx"],
-        "description": "ICD-10 Coding Guidelines and References",
+        "description": "ICD-10 Guidelines",
         "priority": 1
     },
-    "CPT_PROCEDURES": {
+    "Group 2": {
         "collection":"Medical_Coder",
         "files": ["RAG2.xlsx", "RAG2_1.pdf", "RAG2_2.pdf", "RAG2_3.pdf"],
-        "description": "CPT Procedure Codes and Documentation",
-        "priority": 2
+        "description": "ICD-10 Index",
+        "priority": 1
     },
-    "MEDICAL_TERMINOLOGY": {
+    "Group 3": {
         "collection":"Medical_Coder",
         "files": ["RAG3.csv"],
-        "description": "Medical Terminology and Definitions",
-        "priority": 3
+        "description": "ICD-10 Tabular List",
+        "priority": 1
     }
 }
+
 
 # Initialize clients
 qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
@@ -80,7 +81,7 @@ def get_gemini_embedding(text: str) -> List[float]:
         # Fallback: return a zero vector of appropriate dimension (768 for text-embedding-004)
         return [0.0] * 768
 
-def generate_gemini_response(messages: List[Dict[str, str]], temperature: float = 0.7, max_tokens: int = 1024) -> str:
+def generate_gemini_response(messages: List[Dict[str, str]], temperature: float = 0.5, max_tokens: int = 2048) -> str:
     """Generate response using Gemini Flash 2.0"""
     try:
         # Initialize the model
@@ -223,260 +224,213 @@ def extract_conversation_context(conversation_history: List[Dict[str, str]]) -> 
     
     return context
 
-def structure_user_input_with_context(question: str, conversation_context: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Transform user query into structured format using chain-of-thought reasoning with conversation context"""
+def format_conversation_history_for_prompt(conversation_history: List[Dict[str, str]]) -> str:
+    """Format conversation history for prompt inclusion"""
+    if not conversation_history:
+        return "No previous conversation."
+    
+    formatted_history = []
+    for message in conversation_history:
+        role = "User" if message["role"] == "user" else "Assistant"
+        formatted_history.append(f"{role}: {message['content']}")
+    
+    return "\n".join(formatted_history[-10:])  # Last 5 exchanges
+
+def structure_user_input_with_context(question: str, conversation_context: Dict[str, Any] = None, conversation_history: List[Dict[str, str]] = None) -> str:
+    """Rephrase user query using the preprocessing prompt"""
     try:
-        # Enhanced system prompt that considers conversation context
-        system_prompt = """You are an expert medical coding librarian and ICD-10–CM specialist. When given a user question about ICD-10 coding, follow this reasoning framework before producing output:
+        # Use the new preprocessing prompt from the document
+        system_prompt = """You are an expert medical coding assistant specializing in ICD-10. Your task is to rephrase a user's query to make it clear, concise, and optimized for retrieving relevant information from ICD-10 datasets (Guideline, Alphabetic Index, and Tabular List). The rephrased query should:
 
-**STEP 1: Analyze Conversation Context**
-- Review any previous codes mentioned: {previous_codes}
-- Consider patient information from context: {patient_info}
-- Account for topics already discussed: {topics_discussed}
-- Determine if this is a follow-up query or new topic
+1. Preserve the original intent of the user's query.
 
-**STEP 2: Clarify Intent**
-- "I observe the user's question: '{user_input}'."
-- "Which category best fits?"
-  • Code Lookup (find specific diagnosis code)
-  • Guideline Lookup (rules—sequencing, code first)
-  • Inclusion/Exclusion Query
-  • Comparison (differences between codes)
-  • Clinical Scenario (PDx vs SDx, E/M level)
-  • Follow-up Query (building on previous discussion)
-  • Other
-- "I conclude the intent is: ."
+2. Use precise medical terminology when applicable, aligning with ICD-10 standards.
 
-**STEP 3: Identify Key Entities & Context**
-- "I note any explicit terms: body system/chapter, section/category, explicit codes."
-- "I infer implicit context: patient age, gender, setting, severity, laterality, acute vs chronic."
-- "I consider previous conversation context for continuity."
-- "Extracted metadata: {chapter}, {section}, {patient_context}, {qualifiers}."
+3. Clarify ambiguous terms (e.g., "sugar disease" to "diabetes mellitus").
 
-**STEP 4: Enrich Query for Retrieval**
-- "I expand abbreviations and add synonyms (e.g., 'MI' → 'myocardial infarction')."
-- "I append relevant guideline references (e.g., 'use additional code for…')."
-- "I include inclusion/exclusion terms based on official ICD-10–CM notes."
-- "I incorporate context from previous queries if this is a follow-up."
+4. Normalize informal or conversational language into a structured format suitable for retrieval.
 
-**STEP 5: Construct JSON Filters Object**
-- "Now I assemble the final JSON with keys: `query`, `intent`, `search_query`, `filters`, and `context_aware`."
+5. Incorporate relevant context from the conversation history to maintain continuity in multi-turn interactions.
 
-**Deliverable:** Output **only** the JSON object in this format:
+6. Handle misspellings, synonyms, or vague phrasing by mapping to standard medical terms.
 
-{{
-  "query": "Rewritten Search Query: ...",
-  "intent": "Code Lookup",
-  "search_query": "expanded natural-language query",
-  "context_aware": true/false,
-  "filters": {{
-    "chapter": "chapter name or null",
-    "section": "section name or null", 
-    "keywords": ["term1", "term2"],
-    "patient": {{"age": "adult/pediatric/null", "gender": "male/female/null"}},
-    "include": ["include term1"],
-    "exclude": ["exclude term1"],
-    "related_codes": ["previous codes if relevant"]
-  }}
-}}"""
+7. Output only the rephrased query as a single sentence, avoiding explanations or additional text."""
 
-        # Format the prompt with conversation context
-        context_info = conversation_context or {}
-        formatted_prompt = system_prompt.format(
-            previous_codes=context_info.get("previous_codes", []),
-            patient_info=context_info.get("patient_info", {}),
-            topics_discussed=context_info.get("topics_discussed", [])
-        )
+        # Format conversation history
+        conversation_history_text = format_conversation_history_for_prompt(conversation_history)
+        
+        # Create the user message with the template format
+        user_message = f"""*Conversation History*: {conversation_history_text}
+
+*Current User Query*: {question}"""
 
         messages = [
-            {"role": "system", "content": formatted_prompt},
-            {"role": "user", "content": f"User question: {question}"}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
         ]
 
-        response_text = generate_gemini_response(messages, temperature=0.7, max_tokens=1024)
+        rephrased_query = generate_gemini_response(messages, temperature=0.3, max_tokens=512)
         
-        # Try to parse JSON from response
-        try:
-            # Find JSON in the response
-            json_start = response_text.find('{')
-            json_end = response_text.rfind('}') + 1
-            if json_start != -1 and json_end != -1:
-                json_str = response_text[json_start:json_end]
-                structured_query = json.loads(json_str)
-                return structured_query
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse structured query JSON, using fallback")
-        
-        # Fallback structure with context awareness
-        return {
-            "query": question,
-            "intent": "Code Lookup",
-            "search_query": question,
-            "context_aware": len(context_info.get("previous_codes", [])) > 0,
-            "filters": {
-                "chapter": None,
-                "section": None,
-                "code": None,
-                "keywords": remove_stopwords(question),
-                "patient": context_info.get("patient_info", {"age": None, "gender": None}),
-                "include": [],
-                "exclude": [],
-                "related_codes": context_info.get("previous_codes", [])
-            }
-        }
+        return rephrased_query.strip()
 
     except Exception as e:
-        logger.error(f"Error structuring user input: {e}")
-        # Return fallback structure
-        return {
-            "query": question,
-            "intent": "Code Lookup", 
-            "search_query": question,
-            "context_aware": False,
-            "filters": {"keywords": remove_stopwords(question)}
-        }
+        logger.error(f"Error rephrasing user input: {e}")
+        return question
 
-def search_multi_source_rag(structured_query: Dict[str, Any], limit_per_source: int = 3) -> List[Dict[str, Any]]:
-    """Search across multiple RAG sources with prioritization using Gemini embeddings"""
-    all_results = []
-    
-    # Extract search terms
-    search_query = structured_query.get("search_query", "")
-    keywords = structured_query.get("filters", {}).get("keywords", [])
-    related_codes = structured_query.get("filters", {}).get("related_codes", [])
-    
-    # Combine search terms including related codes for context-aware search
-    combined_query = f"{search_query} {' '.join(keywords)}"
-    if related_codes:
-        combined_query += f" {' '.join(related_codes)}"
-    
-    # Generate embedding using Gemini
-    query_embedding = get_gemini_embedding(combined_query)
-    
-    # Search each group's collection
-    for group_name, group_info in DOCUMENT_GROUPS.items():
-        try:
-            collection_name = group_info["collection"]
+def search_single_collection_with_filtering(rephrased_query: str, limit: int = 9) -> List[Dict[str, Any]]:
+    """Search single collection with filtering to avoid duplicates"""
+    try:
+        # Generate embedding for the rephrased query
+        query_embedding = get_gemini_embedding(rephrased_query)
+        
+        # Search single collection with higher limit
+        search_result = qdrant_client.search(
+            collection_name="Medical_Coder",  # Your actual collection name
+            query_vector=query_embedding,
+            limit=limit * 3  # Get more results for deduplication
+        )
+        
+        # Deduplicate results
+        seen_texts = set()
+        unique_results = []
+        
+        for result in search_result:
+            text_content = result.payload.get("text", "")
             
-            # Search this collection
-            search_result = qdrant_client.search(
-                collection_name=collection_name,
-                query_vector=query_embedding,
-                limit=limit_per_source
-            )
+            # Create hash for deduplication
+            import hashlib
+            text_hash = hashlib.md5(text_content.encode()).hexdigest()
             
-            # Add results with source information
-            for result in search_result:
-                all_results.append({
-                    "text": result.payload.get("text", ""),
+            if text_hash not in seen_texts:
+                seen_texts.add(text_hash)
+                
+                # Determine source group based on file name
+                file_name = result.payload.get("metadata", {}).get("file_name", "")
+                source_group = "Unknown"
+                source_description = "Unknown"
+                
+                if file_name in ["RAG1.pdf", "RAG1_1.xlsx"]:
+                    source_group = "Group 1"
+                    source_description = "ICD-10 Guidelines"
+                elif file_name in ["RAG2.xlsx", "RAG2_1.pdf", "RAG2_2.pdf", "RAG2_3.pdf"]:
+                    source_group = "Group 2" 
+                    source_description = "ICD-10 Index"
+                elif file_name in ["RAG3.csv"]:
+                    source_group = "Group 3"
+                    source_description = "ICD-10 Tabular List"
+                
+                unique_results.append({
+                    "text": text_content,
                     "metadata": result.payload.get("metadata", {}),
                     "score": result.score,
-                    "source_group": group_name,
-                    "source_priority": group_info["priority"],
-                    "source_description": group_info["description"]
+                    "source_group": source_group,
+                    "source_priority": 1,
+                    "source_description": source_description
                 })
                 
-        except Exception as e:
-            logger.warning(f"Error searching {group_name}: {e}")
-            continue
-    
-    # Sort by priority (lower number = higher priority) then by score
-    all_results.sort(key=lambda x: (x["source_priority"], -x["score"]))
-    
-    return all_results
+                if len(unique_results) >= limit:
+                    break
+        
+        return unique_results
+        
+    except Exception as e:
+        logger.error(f"Error in single collection search: {e}")
+        return []
 
-def generate_rag_response_with_context(user_question: str, structured_query: Dict[str, Any], rag_results: List[Dict[str, Any]], conversation_history: List[Dict[str, str]] = None, conversation_context: Dict[str, Any] = None) -> str:
-    """Generate response using chain-of-thought reasoning with RAG data and full conversation context"""
+def organize_rag_results_by_source(rag_results: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Organize RAG results by source type for the new prompt format"""
+    organized = {
+        "guideline_context": "",
+        "index_context": "",
+        "tabular_context": ""
+    }
+    
+    for result in rag_results:
+        source_group = result.get("source_group", "")
+        text = result.get("text", "")
+        
+        if source_group == "Group 1":  # Guidelines
+            organized["guideline_context"] += f"{text}\n\n"
+        elif source_group == "Group 2":  # Index
+            organized["index_context"] += f"{text}\n\n"
+        elif source_group == "Group 3":  # Tabular List
+            organized["tabular_context"] += f"{text}\n\n"
+    
+    # Clean up trailing newlines
+    for key in organized:
+        organized[key] = organized[key].strip()
+        if not organized[key]:
+            organized[key] = "No relevant information found."
+    
+    return organized
+
+def generate_rag_response_with_context(user_question: str, rephrased_query: str, rag_results: List[Dict[str, Any]], conversation_history: List[Dict[str, str]] = None, conversation_context: Dict[str, Any] = None) -> str:
+    """Generate response using the new RAG processing prompt"""
     try:
-        # Prepare RAG content with source tags
-        rag_content = ""
-        source_list = []
+        # Use the new RAG processing prompt from the document
+        system_prompt = """You are an expert medical coding assistant specializing in ICD-10-CM. Your task is to generate a response to a user's query based on the provided ICD-10 dataset context (Guideline, Alphabetic Index, and Tabular List) and conversation history, strictly adhering to ICD-10-CM guidelines and formatting the response as specified below. Follow these guidelines:
+
+1. **Use Retrieved Context**: Base the response primarily on the retrieved documents from the Guideline, Alphabetic Index, and Tabular List, ensuring accuracy and relevance.
+
+2. **Incorporate Conversation History**: Reference prior interactions to maintain continuity in multi-turn conversations, addressing follow-up questions appropriately.
+
+3. **Focus on Tabular List Details**: When processing the Tabular List, explicitly consider and reference:
+   - **Include Notes**: Conditions covered by the code (e.g., **J45** includes allergic asthma).
+   - **Exclude 1 Notes**: Conditions not coded here (e.g., **J12.9** excludes SARS pneumonia, **U07.1**).
+   - **Exclude 2 Notes**: Conditions that can be coded separately if present (e.g., **J44.9** excludes **J60-J70**, but both can apply).
+   - **Code Also**: Additional codes needed for full description (e.g., **M32.14** may require **N03.-**).
+   - **Code First**: Underlying condition to code before the manifestation (e.g., **E11.22** requires **I12.-** first).
+   - **Use Additional Code**: Codes for cause or severity (e.g., **E11.621** needs **L97.4-** for ulcer site).
+   - **Laterality**: Left, right, or bilateral specifications (e.g., **H26.11-** for left eye cataract).
+   - **Gender Specificity**: Male or female-specific codes (e.g., **C61** for prostate cancer).
+   - **Age Specificity**: Pediatric or geriatric codes (e.g., **P07.1-** for short gestation).
+
+4. **Apply Combination Code Guidelines**: If two or more diagnoses are related by "due to," "with," or "associated with" in the query or medical context, check for a combination code in ICD-10-CM. If present, assign only the combination code.
+
+5. **Respect Hierarchy and Laterality**: Choose the most specific code available, including laterality, severity, or type (acute/chronic) when applicable. Only default to an unspecified code if the query lacks the necessary detail, and then prompt for clarification.
+
+6. **Handle Query Types**:
+   - For code lookup queries (e.g., "What is the ICD-10 code for diabetes?"), provide the exact code(s) and a brief description.
+   - For guideline queries (e.g., "How do I code a fractured arm?"), include relevant coding rules or instructions from the Guideline.
+   - For general medical inquiries (e.g., "What does E11.9 mean?"), explain the code or concept using the Tabular List and Guideline.
+
+7. **Handle Missing Specificity/Context**: If the query or context lacks specificity (e.g., laterality, type, gender, or age), use the unspecified or default ICD-10-CM code (if applicable) as per the Alphabetic Index or Tabular List, and include a single clarifying question in the "Clarification (if needed)" section to prompt for specific details.
+
+8. **Response Format**:
+   - **Answer**: Provide a concise response with ICD-10 code(s) highlighted (e.g., **E11.9**) or relevant information.
+   - **Rationale**: Explain the response, referencing the Guideline, Include/Exclude notes, Code also/Code first/Use Additional Code instructions, and any relevant laterality, gender, or age specificity from the Tabular List.
+   - **Clarification (if needed)**: Include a single question if clarification is needed for specificity or missing context; otherwise omit this section.
+   - **Disclaimer**: Always include: "This answer is for informational purposes only. Please confirm with the latest ICD-10-CM guidelines or a certified medical coder."
+
+9. **Adhere to ICD-10-CM Guidelines**: Follow official coding conventions, including sequencing rules and specificity requirements, as outlined in the Guideline dataset.
+
+10. **Avoid Non-ICD-10 Content**: Do not include unrelated information (e.g., general health advice or CPT) unless supported by the datasets."""
+
+        # Format conversation history
+        conversation_history_text = format_conversation_history_for_prompt(conversation_history)
         
-        for i, result in enumerate(rag_results):
-            source_tag = f"[{result['source_group']}-{i+1}]"
-            source_list.append(f"{source_tag}: {result['source_description']}")
-            rag_content += f"\n{source_tag} {result['text']}\n"
+        # Organize RAG results by source
+        organized_context = organize_rag_results_by_source(rag_results)
         
-        # Enhanced system prompt that considers full conversation context
-        system_prompt = """You are a certified ICD-10–CM coding assistant with access to conversation history. You have these inputs:
-1. User's current query: '{user_input}'
-2. Retrieved RAG content (with source tags): {rag_results}
-3. Source identifiers: {source_list}
-4. Full conversation history for context
-5. Conversation context: {conversation_context}
+        # Create the user message with the template format
+        user_message = f"""**Conversation History**: {conversation_history_text}
 
-Before writing your answer, follow this enhanced chain-of-thought:
+**Rephrased User Query**: {rephrased_query}
 
-**STEP 1: Analyze Conversation Continuity**
-- "I review the conversation history to understand the ongoing discussion."
-- "I identify if this is a follow-up question or new topic."
-- "I note any previous codes, patient details, or topics discussed."
+**Retrieved Context**:
 
-**STEP 2: Organize Retrieved Data**
-- "I group the retrieved segments by source: GROUP1, GROUP2, GROUP3."
-- "I note any overlapping or conflicting information."
-- "I consider how new information relates to previous discussion."
+- **Guideline**: {organized_context['guideline_context']}
 
-**STEP 3: Apply Source Prioritization** 
-- "I select answers from the highest-priority source available, in order: GROUP1 > GROUP2 > GROUP3."
-- "If two sources at the same level conflict, I choose the most specific guideline language."
+- **Alphabetic Index**: {organized_context['index_context']}
 
-**STEP 4: Reason Through Code Selection with Context**
-- "I determine Primary Diagnosis Code(s) considering previous discussion context."
-- "I identify Secondary Code(s) based on current query and conversation history."
-- "I ensure consistency with previously provided information."
-- "If no specificity is provided, consider it as unspecified."
+- **Tabular List**: {organized_context['tabular_context']}"""
 
-**STEP 5: Draft Contextual Response**
-- "I will acknowledge the conversation context when relevant."
-- "I will list all relevant ICD-10–CM codes with descriptions."
-- "I will provide rationale considering both current query and conversation flow."
-- "If building on previous codes, I'll reference them appropriately."
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message}
+        ]
 
-**STEP 6: Finalize Structured Output**
-- "I assemble the final formatted answer with contextual awareness."
-
-Now produce the answer in the format below:
-
-**Context Acknowledgment (if applicable):**
-[Brief reference to previous discussion if this is a follow-up]
-
-**ICD-10–CM Codes:**
-- CODE – Description
-- CODE – Description
-
-**Rationale:**
-- CODE: Explanation (reference guideline, includes/excludes, context match, or relationship to previous discussion)
-- CODE: Explanation
-
-**Clarification (if needed):**
-[Your single question here]
-
-**Disclaimer:** This answer is for informational purposes only. Please confirm with the latest ICD-10–CM guidelines or a certified medical coder."""
-
-        user_prompt = f"""User's current query: {user_question}
-
-Retrieved RAG content:
-{rag_content}
-
-Source identifiers:
-{chr(10).join(source_list)}
-
-Structured query context: {json.dumps(structured_query, indent=2)}
-
-Conversation context: {json.dumps(conversation_context or {}, indent=2)}"""
-
-        # Prepare messages with full conversation history
-        messages = [{"role": "system", "content": system_prompt}]
-        
-        # Add full conversation history for context-aware responses
-        if conversation_history:
-            # Include more of the conversation history for better context
-            messages.extend(conversation_history[-10:])  # Last 5 exchanges instead of 3
-        
-        messages.append({"role": "user", "content": user_prompt})
-
-        return generate_gemini_response(messages, temperature=0.3, max_tokens=1536)  # Increased token limit for more detailed responses
+        return generate_gemini_response(messages, temperature=0.3, max_tokens=1536)
 
     except Exception as e:
         logger.error(f"Error generating RAG response: {e}")
@@ -562,9 +516,9 @@ async def save_conversation_message(chat_id: str, user_id: str, user_message: st
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Enhanced chat API endpoint with full conversation context awareness"""
+    """Enhanced chat API endpoint with new prompts"""
     try:
-        # Get full conversation history (unless it's explicitly a new chat)
+        # Get conversation history
         conversation_history = []
         if request.chat_id and not request.is_new_chat:
             conversation_history = await get_conversation_history(request.chat_id, request.user_id, limit=50)
@@ -575,24 +529,27 @@ async def chat(request: ChatRequest):
         # Determine if this is a follow-up query
         is_follow_up = is_follow_up_query(request.question, conversation_history)
         
-        # Check if it's a medical query (consider follow-up context)
+        # Check if it's a medical query
         is_medical = is_medical_query(request.question) or (is_follow_up and any("medical" in topic.lower() for topic in conversation_context.get("topics_discussed", [])))
         
         if not is_medical:
             answer = generate_general_response(request.question, conversation_history)
+            rag_results = []
+            rephrased_query = None
         else:
-            # Step 1: Structure the user input with conversation context
-            structured_query = structure_user_input_with_context(request.question, conversation_context)
-            logger.info(f"Structured query: {structured_query}")
+            # Rephrase the user input using the new preprocessing prompt
+            rephrased_query = structure_user_input_with_context(request.question, conversation_context, conversation_history)
+            logger.info(f"Rephrased query: {rephrased_query}")
             
-            # Step 2: Multi-source RAG retrieval
-            rag_results = search_multi_source_rag(structured_query, limit_per_source=3)
-            logger.info(f"Retrieved {len(rag_results)} results from RAG sources")
+            # Search using the rephrased query
+            rag_results = search_single_collection_with_filtering(rephrased_query, limit=9)
             
-            # Step 3: Generate response with full conversation context
+            logger.info(f"Retrieved {len(rag_results)} unique results from RAG sources")
+            
+            # Generate response with the new RAG processing prompt
             answer = generate_rag_response_with_context(
                 request.question, 
-                structured_query, 
+                rephrased_query, 
                 rag_results, 
                 conversation_history, 
                 conversation_context
@@ -601,23 +558,24 @@ async def chat(request: ChatRequest):
         # Save the conversation message
         await save_conversation_message(request.chat_id, request.user_id, request.question, answer)
         
-        # Prepare sources information
+        # Prepare sources information (now deduplicated)
         sources = []
-        if is_medical:
-            for result in rag_results:
-                metadata = result["metadata"]
-                sources.append({
-                    "file_name": metadata.get("file_name", "Unknown"),
-                    "source_group": result["source_group"],
-                    "source_description": result["source_description"],
-                    "source_priority": result["source_priority"],
-                    "score": result["score"]
-                })
+        for result in rag_results:
+            metadata = result["metadata"]
+            sources.append({
+                "file_name": metadata.get("file_name", "Unknown"),
+                "source_group": result["source_group"],
+                "source_description": result["source_description"],
+                "source_priority": result["source_priority"],
+                "score": result["score"],
+                "text": result["text"],
+                "metadata": metadata
+            })
         
         return ChatResponse(
             answer=answer, 
             sources=sources,
-            structured_query=structured_query if is_medical else None,
+            structured_query={"rephrased_query": rephrased_query} if rephrased_query else None,
             conversation_context={
                 "is_follow_up": is_follow_up,
                 "conversation_length": len(conversation_history),
