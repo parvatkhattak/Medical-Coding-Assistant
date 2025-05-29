@@ -41,20 +41,20 @@ MAX_WORKERS = 3  # For concurrent processing
 
 # Enhanced document groups with metadata
 DOCUMENT_GROUPS = {
-    "ICD_CODES": {
+    "Group 1": {
         "files": ["RAG1.pdf", "RAG1_1.xlsx"],
-        "description": "ICD-10 Coding Guidelines and References",
+        "description": "ICD-10 Guidelines",
         "priority": 1
     },
-    "CPT_PROCEDURES": {
+    "Group 2": {
         "files": ["RAG2.xlsx", "RAG2_1.pdf", "RAG2_2.pdf", "RAG2_3.pdf"],
-        "description": "CPT Procedure Codes and Documentation",
-        "priority": 2
+        "description": "ICD-10 Index",
+        "priority": 1
     },
-    "MEDICAL_TERMINOLOGY": {
+    "Group 3": {
         "files": ["RAG3.csv"],
-        "description": "Medical Terminology and Definitions",
-        "priority": 3
+        "description": "ICD-10 Tabular List",
+        "priority": 1
     }
 }
 
