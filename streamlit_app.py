@@ -80,6 +80,29 @@ st.markdown("""
         margin-right: 10%;
     }
     
+    /* Debug message styling */
+    .debug-message {
+        background: linear-gradient(135deg, #7c2d12 0%, #9a3412 100%);
+        border-left: 4px solid #ea580c;
+        margin: 1rem 0;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .debug-content {
+        background: rgba(0, 0, 0, 0.3);
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 0.5rem;
+        font-family: 'Courier New', monospace;
+        font-size: 0.85rem;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+    }
+    
     .chat-message h4 {
         color: #f1f5f9;
         margin-bottom: 0.5rem;
@@ -175,6 +198,16 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3) !important;
     }
     
+    /* Debug button styling */
+    .debug-button button {
+        background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%) !important;
+        color: white !important;
+    }
+    
+    .debug-button button:hover {
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3) !important;
+    }
+    
     /* Quick action buttons */
     .quick-btn {
         background: rgba(71, 85, 105, 0.6) !important;
@@ -235,6 +268,15 @@ st.markdown("""
     footer {visibility: hidden;}
     header {visibility: hidden;}
     
+    /* Toggle switch for debug mode */
+    .debug-toggle {
+        background: rgba(30, 41, 59, 0.6);
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    
     /* Responsive design for mobile */
     @media (max-width: 768px) {
         .main .block-container {
@@ -243,7 +285,7 @@ st.markdown("""
             padding-right: 0.5rem;
         }
         
-        .user-message, .assistant-message {
+        .user-message, .assistant-message, .debug-message {
             margin-left: 0;
             margin-right: 0;
             padding: 0.8rem;
@@ -340,6 +382,10 @@ if "chat_id" not in st.session_state:
     st.session_state.chat_id = str(uuid.uuid4())
 if "user_id" not in st.session_state:
     st.session_state.user_id = "user"
+if "debug_mode" not in st.session_state:
+    st.session_state.debug_mode = False
+if "last_api_response" not in st.session_state:
+    st.session_state.last_api_response = None
 
 def call_chatbot_api(question: str) -> Dict[str, Any]:
     """Call the FastAPI chatbot endpoint"""
@@ -357,7 +403,10 @@ def call_chatbot_api(question: str) -> Dict[str, Any]:
         )
         
         if response.status_code == 200:
-            return response.json()
+            api_response = response.json()
+            # Store the full API response for debug purposes
+            st.session_state.last_api_response = api_response
+            return api_response
         elif response.status_code == 429:
             return {
                 "answer": "⚠️ Rate limit exceeded. Please wait before trying again."
@@ -407,6 +456,90 @@ def display_chat_message(message: Dict[str, Any], is_user: bool = False):
         </div>
         """, unsafe_allow_html=True)
 
+def display_debug_info(api_response: Dict[str, Any]):
+    """Display debug information about the API response"""
+    st.markdown("""
+    <div class="chat-message debug-message">
+        <h4>🔧 Debug Information</h4>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Create tabs for different debug sections
+    debug_tabs = st.tabs(["📊 Summary", "🔍 Sources", "🧠 Structured Query", "📈 Full Response"])
+    
+    with debug_tabs[0]:
+        # Summary information
+        st.subheader("Response Summary")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            sources_count = len(api_response.get("sources", []))
+            st.metric("Sources Found", sources_count)
+        
+        with col2:
+            has_structured_query = api_response.get("structured_query") is not None
+            st.metric("Structured Query", "Yes" if has_structured_query else "No")
+        
+        with col3:
+            response_length = len(api_response.get("answer", ""))
+            st.metric("Response Length", f"{response_length} chars")
+    
+    with debug_tabs[1]:
+        # Sources information
+        st.subheader("Retrieved Sources")
+        sources = api_response.get("sources", [])
+        
+        if sources:
+            for i, source in enumerate(sources):
+                with st.expander(f"Source {i+1}: {source.get('source_group', 'Unknown')} - Score: {source.get('score', 0):.4f}"):
+                    st.write("**File Name:**", source.get('file_name', 'Unknown'))
+                    st.write("**Source Description:**", source.get('source_description', 'N/A'))
+                    st.write("**Priority:**", source.get('source_priority', 'N/A'))
+                    st.write("**Score:**", source.get('score', 'N/A'))
+                    
+                    # Display metadata if available
+                    metadata = source.get('metadata', {})
+                    if metadata:
+                        st.write("**Metadata:**")
+                        st.json(metadata)
+                    
+                    # Display source text
+                    st.write("**Content:**")
+                    text_content = source.get('text', 'No content available')
+                    if len(text_content) > 500:
+                        st.text_area("Source Content", text_content, height=200, disabled=True, key=f"source_text_{i}")
+                    else:
+                        st.write(text_content)
+        else:
+            st.info("No sources retrieved for this query")
+    
+    with debug_tabs[2]:
+        # Structured query information
+        st.subheader("Structured Query Analysis")
+        structured_query = api_response.get("structured_query")
+        
+        if structured_query:
+            st.json(structured_query)
+            
+            # Additional analysis
+            if isinstance(structured_query, dict):
+                st.write("**Query Intent:**", structured_query.get("intent", "Unknown"))
+                st.write("**Context Aware:**", structured_query.get("context_aware", False))
+                
+                filters = structured_query.get("filters", {})
+                if filters:
+                    st.write("**Applied Filters:**")
+                    for key, value in filters.items():
+                        if value:  # Only show non-empty filters
+                            st.write(f"- **{key.capitalize()}:** {value}")
+        else:
+            st.info("No structured query information available")
+    
+    with debug_tabs[3]:
+        # Full API response
+        st.subheader("Complete API Response")
+        st.json(api_response)
+
 def safe_rerun():
     """Safely handle page rerun across different Streamlit versions"""
     try:
@@ -431,7 +564,8 @@ def process_sample_question(question: str):
         response = call_chatbot_api(question)
         assistant_message = {
             "role": "assistant", 
-            "content": response["answer"]
+            "content": response["answer"],
+            "debug_data": response if st.session_state.debug_mode else None
         }
         st.session_state.messages.append(assistant_message)
 
@@ -456,6 +590,25 @@ def main():
         else:
             st.markdown('<p class="status-offline">🔴 API Offline</p>', unsafe_allow_html=True)
             st.error(health["message"])
+        
+        # Debug Mode Toggle
+        st.markdown("## 🔧 Debug Settings")
+        st.session_state.debug_mode = st.toggle(
+            "Enable Debug Mode", 
+            value=st.session_state.debug_mode,
+            help="Show detailed information about API responses and retrieved data"
+        )
+        
+        if st.session_state.debug_mode:
+            st.success("🔍 Debug mode enabled")
+            
+            # # Show debug button for last response if available
+            # if st.session_state.last_api_response:
+            #     if st.button("🔧 Show Last Debug Info", help="Display debug information for the last API response"):
+            #         # We'll display this in the main area
+            #         st.session_state.show_debug_popup = True
+        else:
+            st.info("Debug mode disabled")
         
         # Session info
         st.markdown("## 💬 Session Info")
@@ -487,11 +640,13 @@ def main():
             if st.button("🆕 New Chat", type="primary", help="Start a new conversation"):
                 st.session_state.messages = []
                 st.session_state.chat_id = str(uuid.uuid4())
+                st.session_state.last_api_response = None
                 safe_rerun()
         
         with col2:
             if st.button("🗑️ Clear Chat", type="secondary", help="Clear current conversation"):
                 st.session_state.messages = []
+                st.session_state.last_api_response = None
                 safe_rerun()
         
         # Instructions
@@ -499,7 +654,8 @@ def main():
         st.markdown("""
         1. **Ask Questions**: Type medical coding questions below
         2. **Get Answers**: Receive AI-powered coding guidance
-        3. **Follow Up**: Ask clarifying questions as needed
+        3. **Debug Mode**: Enable to see retrieved sources and query analysis
+        4. **Follow Up**: Ask clarifying questions as needed
         
         **Example Questions:**
         - "What is the ICD-10 code for acute MI?"
@@ -508,12 +664,24 @@ def main():
         """)
 
     # Main chat area
+    # Show debug popup if requested
+    if hasattr(st.session_state, 'show_debug_popup') and st.session_state.show_debug_popup:
+        if st.session_state.last_api_response:
+            st.markdown("---")
+            display_debug_info(st.session_state.last_api_response)
+            st.markdown("---")
+        st.session_state.show_debug_popup = False
+    
     # Display chat history
     for message in st.session_state.messages:
         if message["role"] == "user":
             display_chat_message(message, is_user=True)
         else:
             display_chat_message(message, is_user=False)
+            
+            # Show debug info if debug mode is enabled and debug data is available
+            if st.session_state.debug_mode and message.get("debug_data"):
+                display_debug_info(message["debug_data"])
     
     # Chat input
     placeholder_text = "Ask me about medical coding..." if api_online else "API server offline"
@@ -529,10 +697,15 @@ def main():
             response = call_chatbot_api(prompt)
             assistant_message = {
                 "role": "assistant",
-                "content": response["answer"]
+                "content": response["answer"],
+                "debug_data": response if st.session_state.debug_mode else None
             }
             st.session_state.messages.append(assistant_message)
             display_chat_message(assistant_message, is_user=False)
+            
+            # Show debug info immediately if debug mode is enabled
+            if st.session_state.debug_mode:
+                display_debug_info(response)
 
     # Footer
     st.markdown("""
