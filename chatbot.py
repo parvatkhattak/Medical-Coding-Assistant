@@ -81,7 +81,7 @@ def get_gemini_embedding(text: str) -> List[float]:
         # Fallback: return a zero vector of appropriate dimension (768 for text-embedding-004)
         return [0.0] * 768
 
-def generate_gemini_response(messages: List[Dict[str, str]], temperature: float = 0.5, max_tokens: int = 512) -> str:
+def generate_gemini_response(messages: List[Dict[str, str]], temperature: float = 0.5, max_tokens: int = 128) -> str:
     """Generate response using Gemini Flash 2.0"""
     try:
         # Initialize the model
