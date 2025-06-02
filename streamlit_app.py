@@ -490,6 +490,9 @@ def display_debug_info(api_response: Dict[str, Any]):
         sources = api_response.get("sources", [])
         
         if sources:
+            # Generate a unique timestamp or hash for this debug session
+            debug_session_id = int(time.time() * 1000)  # Use milliseconds for uniqueness
+            
             for i, source in enumerate(sources):
                 with st.expander(f"Source {i+1}: {source.get('source_group', 'Unknown')} - Score: {source.get('score', 0):.4f}"):
                     st.write("**File Name:**", source.get('file_name', 'Unknown'))
@@ -507,7 +510,9 @@ def display_debug_info(api_response: Dict[str, Any]):
                     st.write("**Content:**")
                     text_content = source.get('text', 'No content available')
                     if len(text_content) > 500:
-                        st.text_area("Source Content", text_content, height=200, disabled=True, key=f"source_text_{i}")
+                        # Create a unique key using debug session ID and source index
+                        unique_key = f"source_text_{debug_session_id}_{i}"
+                        st.text_area("Source Content", text_content, height=200, disabled=True, key=unique_key)
                     else:
                         st.write(text_content)
         else:
