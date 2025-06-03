@@ -126,10 +126,10 @@ DOCUMENT_GROUPS = {
 
 RAG_CONFIG = {
     "MAX_RESULTS": 9,           # Maximum results to retrieve
-    "MIN_TEXT_LENGTH": 35,      # Minimum text length for quality filtering
-    "SIMILARITY_THRESHOLD": 0.6, # Minimum similarity score
+    "MIN_TEXT_LENGTH": 33,      # Minimum text length for quality filtering
+    "SIMILARITY_THRESHOLD": 0.53, # Minimum similarity score
     "MAX_SECTION_LENGTH": 1500, # Maximum length per source section
-    "MAX_TEXT_LENGTH": 500      # Maximum length per individual result
+    "MAX_TEXT_LENGTH": 650      # Maximum length per individual result
 }
 # Initialize clients
 qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
