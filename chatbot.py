@@ -26,6 +26,69 @@ def remove_stopwords(text):
     words = [word.strip() for word in text.lower().split() if word.strip() != ""]
     return [word for word in words if word.isalnum() and word not in stop_words]
 
+
+def calculate_relevance_score(query_text: str, result_text: str, base_score: float) -> float:
+    """Calculate enhanced relevance score based on keyword matching and semantic similarity"""
+    try:
+        # Clean and tokenize both texts
+        query_words = set(remove_stopwords(query_text.lower()))
+        result_words = set(remove_stopwords(result_text.lower()))
+        
+        # Calculate keyword overlap
+        if not query_words:
+            keyword_overlap = 0
+        else:
+            common_words = query_words.intersection(result_words)
+            keyword_overlap = len(common_words) / len(query_words)
+        
+        # Boost score for exact medical code matches
+        import re
+        query_codes = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', query_text.upper()))
+        result_codes = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', result_text.upper()))
+        
+        code_match_bonus = 0.3 if query_codes.intersection(result_codes) else 0
+        
+        # Calculate final relevance score
+        relevance_score = (base_score * 0.7) + (keyword_overlap * 0.2) + code_match_bonus + (len(result_text.strip()) / 1000 * 0.1)
+        
+        return min(relevance_score, 1.0)  # Cap at 1.0
+        
+    except Exception as e:
+        logger.error(f"Error calculating relevance score: {e}")
+        return base_score
+
+
+def filter_by_content_quality(results: List[Dict[str, Any]], min_length: int = None) -> List[Dict[str, Any]]:
+    """Filter results based on content quality and length"""
+    if min_length is None:
+        min_length = RAG_CONFIG["MIN_TEXT_LENGTH"]
+    
+    filtered_results = []
+    
+    for result in results:
+        text = result.get("text", "").strip()
+        
+        # Skip very short or empty results
+        if len(text) < min_length:
+            continue
+            
+        # Skip results that are mostly punctuation or numbers
+        alpha_ratio = sum(c.isalpha() for c in text) / len(text) if text else 0
+        if alpha_ratio < 0.3:
+            continue
+            
+        # Skip repetitive content
+        words = text.split()
+        if len(words) > 0:
+            unique_words = set(words)
+            repetition_ratio = len(unique_words) / len(words)
+            if repetition_ratio < 0.3:  # Too repetitive
+                continue
+        
+        filtered_results.append(result)
+    
+    return filtered_results
+
 # Load environment variables
 load_dotenv()
 
@@ -61,6 +124,13 @@ DOCUMENT_GROUPS = {
 }
 
 
+RAG_CONFIG = {
+    "MAX_RESULTS": 9,           # Maximum results to retrieve
+    "MIN_TEXT_LENGTH": 35,      # Minimum text length for quality filtering
+    "SIMILARITY_THRESHOLD": 0.55, # Minimum similarity score
+    "MAX_SECTION_LENGTH": 1200, # Maximum length per source section
+    "MAX_TEXT_LENGTH": 600      # Maximum length per individual result
+}
 # Initialize clients
 qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
@@ -143,21 +213,132 @@ class ChatResponse(BaseModel):
     conversation_context: Optional[Dict[str, Any]] = None  # New field for context info
 
 def is_medical_query(question: str) -> bool:
-    """Determine if the question is related to medical coding"""
+    """Enhanced function to determine if the question is related to medical coding"""
+    
+    # Expanded medical keywords including clinical terms
     medical_keywords = [
+        # Coding-specific terms
         'icd', 'code', 'diagnosis', 'medical', 'condition', 'disease', 'symptom',
         'guideline', 'documentation', 'requirement', 'coding', 'clinical', 'health',
-        'patient', 'treatment', 'procedure', 'assessment', 'record', 'chart'
+        'patient', 'treatment', 'procedure', 'assessment', 'record', 'chart',
+        
+        # Clinical conditions and terms
+        'pneumonia', 'sepsis', 'diabetes', 'hypertension', 'fracture', 'infection',
+        'cancer', 'tumor', 'carcinoma', 'syndrome', 'disorder', 'injury', 'wound',
+        'acute', 'chronic', 'malignant', 'benign', 'bilateral', 'unilateral',
+        'myocardial', 'infarction', 'stroke', 'cerebrovascular', 'respiratory',
+        'cardiovascular', 'gastrointestinal', 'neurological', 'psychiatric',
+        'orthopedic', 'dermatological', 'ophthalmological', 'urological',
+        
+        # Anatomical terms
+        'heart', 'lung', 'liver', 'kidney', 'brain', 'spine', 'bone', 'joint',
+        'muscle', 'nerve', 'blood', 'vessel', 'artery', 'vein', 'abdomen',
+        'chest', 'head', 'neck', 'arm', 'leg', 'hand', 'foot', 'eye', 'ear',
+        
+        # Medical procedures and treatments
+        'surgery', 'operation', 'biopsy', 'transplant', 'dialysis', 'chemotherapy',
+        'radiation', 'therapy', 'rehabilitation', 'medication', 'antibiotic',
+        'anesthesia', 'ventilator', 'icu', 'intensive care',
+        
+        # Pathology terms
+        'bacterial', 'viral', 'fungal', 'parasitic', 'infectious', 'inflammatory',
+        'autoimmune', 'genetic', 'congenital', 'acquired', 'traumatic',
+        'degenerative', 'metastatic', 'hemorrhage', 'thrombosis', 'embolism',
+        
+        # Specific organisms and conditions
+        'staphylococcus', 'streptococcus', 'mrsa', 'pneumococcus', 'influenza',
+        'covid', 'hepatitis', 'tuberculosis', 'malaria', 'hiv', 'aids',
+        'alzheimer', 'parkinson', 'asthma', 'copd', 'emphysema',
+        
+        # Severity and acuity indicators
+        'severe', 'mild', 'moderate', 'critical', 'stable', 'unstable',
+        'progressive', 'recurrent', 'refractory', 'resistant', 'sensitive',
+        
+        # Medical specialties context
+        'cardiology', 'pulmonology', 'neurology', 'oncology', 'pediatrics',
+        'geriatrics', 'psychiatry', 'radiology', 'pathology', 'anesthesiology'
+    ]
+    
+    # Medical code patterns (ICD-10, CPT, etc.)
+    import re
+    code_patterns = [
+        r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b',  # ICD-10 codes (e.g., J15.212, E11.9)
+        r'\b\d{5}(?:-\d{2})?\b',          # CPT codes
+        r'\b[A-Z]\d{2}-[A-Z]\d{2}\b'     # ICD-10 ranges
     ]
     
     question_lower = question.lower()
-    # Check for common greetings or general chat
-    general_chat_patterns = ['hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening', 'how are you']
     
-    if any(pattern in question_lower for pattern in general_chat_patterns):
+    # Check for common greetings or purely general chat
+    general_chat_patterns = [
+        'hello', 'hi there', 'hey', 'good morning', 'good afternoon', 
+        'good evening', 'how are you', 'thank you', 'thanks', 'bye', 'goodbye',
+        'what is your name', 'who are you', 'can you help me'
+    ]
+    
+    # If it's a pure greeting without medical context, return False
+    if any(pattern in question_lower for pattern in general_chat_patterns) and len(question.split()) <= 5:
         return False
     
-    return any(keyword in question_lower for keyword in medical_keywords)
+    # Check for medical code patterns first
+    for pattern in code_patterns:
+        if re.search(pattern, question.upper()):
+            return True
+    
+    # Check for medical keywords
+    if any(keyword in question_lower for keyword in medical_keywords):
+        return True
+    
+    # Advanced pattern matching for complex medical scenarios
+    medical_patterns = [
+        # Age + gender + medical condition pattern
+        r'\b\d+[-\s]*year[-\s]*old\s+(male|female|man|woman|patient)',
+        
+        # "Diagnosed with" pattern
+        r'\b(diagnosed|presents)\s+with\b',
+        
+        # "Due to" medical causation pattern
+        r'\b(due\s+to|caused\s+by|secondary\s+to)\s+\w+',
+        
+        # Medical severity indicators
+        r'\b(severe|acute|chronic|mild|moderate)\s+\w+(sis|tion|ity|ism|oma)\b',
+        
+        # Admission/treatment context
+        r'\b(admitted|hospitalized|treated|discharged)\s+(to|from|for|with)\b',
+        
+        # Multiple condition indicators
+        r'\band\s+\w+(sis|tion|ity|ism|oma)\b.*\bwith\b',
+        
+        # What are the codes pattern
+        r'\bwhat\s+(are\s+the\s+)?(correct\s+)?(icd|codes?)\b',
+        
+        # Medical scenario pattern
+        r'\b(scenario|case|situation)\b.*\b(code|coding|icd)\b'
+    ]
+    
+    for pattern in medical_patterns:
+        if re.search(pattern, question_lower, re.IGNORECASE):
+            return True
+    
+    # Check for medical abbreviations
+    medical_abbreviations = [
+        'mrsa', 'uti', 'copd', 'chf', 'mi', 'cva', 'dvt', 'pe', 'icu', 'er',
+        'cad', 'dm', 'htn', 'afib', 'cabg', 'ptca', 'tia', 'ards', 'ckd'
+    ]
+    
+    if any(abbr in question_lower for abbr in medical_abbreviations):
+        return True
+    
+    # Contextual indicators - if question is complex and mentions medical-sounding terms
+    if len(question.split()) > 10:  # Complex query
+        medical_indicators = [
+            'resistant', 'shock', 'failure', 'syndrome', 'episode', 'attack',
+            'reaction', 'complication', 'manifestation', 'exacerbation'
+        ]
+        if any(indicator in question_lower for indicator in medical_indicators):
+            return True
+    
+    return False
 
 def is_follow_up_query(question: str, conversation_history: List[Dict[str, str]]) -> bool:
     """Determine if the current question is a follow-up to previous conversation"""
@@ -236,6 +417,69 @@ def format_conversation_history_for_prompt(conversation_history: List[Dict[str, 
     
     return "\n".join(formatted_history[-10:])  # Last 5 exchanges
 
+
+def enhance_query_for_retrieval(query: str) -> str:
+    """Enhanced query enhancement with better medical term mapping"""
+    try:
+        # Expanded medical term mappings for better retrieval
+        medical_mappings = {
+            # Common to medical terms
+            'sugar disease': 'diabetes mellitus',
+            'high blood pressure': 'hypertension',
+            'heart attack': 'myocardial infarction',
+            'stroke': 'cerebrovascular accident',
+            'broken bone': 'fracture',
+            'stomach ache': 'abdominal pain',
+            'headache': 'cephalgia',
+            'flu': 'influenza',
+            'cold': 'upper respiratory infection',
+            
+            # Bacterial/organism terms
+            'mrsa': 'methicillin-resistant staphylococcus aureus',
+            'staph': 'staphylococcus',
+            'strep': 'streptococcus',
+            'e. coli': 'escherichia coli',
+            'c. diff': 'clostridium difficile',
+            
+            # Condition synonyms
+            'blood poisoning': 'sepsis',
+            'septic shock': 'severe sepsis with septic shock',
+            'lung infection': 'pneumonia',
+            'chest infection': 'respiratory infection',
+            'kidney infection': 'pyelonephritis',
+            'bladder infection': 'cystitis',
+            'skin infection': 'cellulitis',
+            
+            # Severity indicators
+            'serious': 'severe',
+            'bad': 'severe',
+            'mild': 'mild',
+            'getting worse': 'progressive',
+            'came back': 'recurrent'
+        }
+        
+        enhanced_query = query.lower()
+        
+        # Replace common terms with medical equivalents
+        for common_term, medical_term in medical_mappings.items():
+            if common_term in enhanced_query:
+                enhanced_query = enhanced_query.replace(common_term, medical_term)
+        
+        # Add ICD-10 context keywords for better retrieval
+        icd_context_terms = ['icd-10', 'code', 'diagnosis', 'classification']
+        
+        # If the query doesn't contain coding-specific terms, add them
+        if not any(term in enhanced_query for term in icd_context_terms):
+            # Check if it's asking for codes
+            if any(phrase in enhanced_query for phrase in ['what are the', 'correct codes', 'icd codes']):
+                enhanced_query += ' icd-10 code diagnosis'
+        
+        return enhanced_query
+        
+    except Exception as e:
+        logger.error(f"Error enhancing query: {e}")
+        return query
+    
 def structure_user_input_with_context(question: str, conversation_context: Dict[str, Any] = None, conversation_history: List[Dict[str, str]] = None) -> str:
     """Rephrase user query using the preprocessing prompt"""
     try:
@@ -277,25 +521,39 @@ def structure_user_input_with_context(question: str, conversation_context: Dict[
         logger.error(f"Error rephrasing user input: {e}")
         return question
 
-def search_single_collection_with_filtering(rephrased_query: str, limit: int = 9) -> List[Dict[str, Any]]:
-    """Search single collection with filtering to avoid duplicates"""
+def search_single_collection_with_filtering(rephrased_query: str, limit: int = None) -> List[Dict[str, Any]]:
+    """Enhanced search with improved filtering and relevance scoring"""
+    if limit is None:
+        limit = RAG_CONFIG["MAX_RESULTS"]
+    
     try:
         # Generate embedding for the rephrased query
         query_embedding = get_gemini_embedding(rephrased_query)
         
-        # Search single collection with higher limit
+        # Search with higher initial limit for better filtering
+        initial_limit = min(50, limit * 10)  # Get more results initially
+        
         search_result = qdrant_client.search(
-            collection_name="Medical_Coder",  # Your actual collection name
+            collection_name="Medical_Coder",
             query_vector=query_embedding,
-            limit=limit * 3  # Get more results for deduplication
+            limit=initial_limit,
+            score_threshold=RAG_CONFIG["SIMILARITY_THRESHOLD"]  # Use config value
         )
         
-        # Deduplicate results
+        # Process and score results
+        processed_results = []
         seen_texts = set()
-        unique_results = []
         
         for result in search_result:
-            text_content = result.payload.get("text", "")
+            text_content = result.payload.get("text", "").strip()
+            
+            # Skip empty or very short content using config
+            if len(text_content) < RAG_CONFIG["MIN_TEXT_LENGTH"]:
+                continue
+            
+            # Truncate text if it exceeds max length
+            if len(text_content) > RAG_CONFIG["MAX_TEXT_LENGTH"]:
+                text_content = text_content[:RAG_CONFIG["MAX_TEXT_LENGTH"]] + "..."
             
             # Create hash for deduplication
             import hashlib
@@ -304,59 +562,118 @@ def search_single_collection_with_filtering(rephrased_query: str, limit: int = 9
             if text_hash not in seen_texts:
                 seen_texts.add(text_hash)
                 
-                # Determine source group based on file name
+                # Calculate enhanced relevance score
+                relevance_score = calculate_relevance_score(
+                    rephrased_query, 
+                    text_content, 
+                    result.score
+                )
+                
+                # Determine source group
                 file_name = result.payload.get("metadata", {}).get("file_name", "")
-                source_group = "Unknown"
-                source_description = "Unknown"
+                source_group, source_description = get_source_info(file_name)
                 
-                if file_name in ["RAG1.pdf", "RAG1_1.xlsx"]:
-                    source_group = "Group 1"
-                    source_description = "ICD-10 Guidelines"
-                elif file_name in ["RAG2.xlsx", "RAG2_1.pdf", "RAG2_2.pdf", "RAG2_3.pdf"]:
-                    source_group = "Group 2" 
-                    source_description = "ICD-10 Index"
-                elif file_name in ["RAG3.csv"]:
-                    source_group = "Group 3"
-                    source_description = "ICD-10 Tabular List"
-                
-                unique_results.append({
+                processed_results.append({
                     "text": text_content,
                     "metadata": result.payload.get("metadata", {}),
                     "score": result.score,
+                    "relevance_score": relevance_score,
                     "source_group": source_group,
                     "source_priority": 1,
                     "source_description": source_description
                 })
-                
-                if len(unique_results) >= limit:
-                    break
         
-        return unique_results
+        # Filter by content quality using config
+        quality_filtered = filter_by_content_quality(processed_results)
+        
+        # Sort by relevance score (combination of similarity and keyword matching)
+        quality_filtered.sort(key=lambda x: x["relevance_score"], reverse=True)
+        
+        # Apply diversity filtering to avoid too many results from same source
+        diverse_results = apply_source_diversity(quality_filtered, limit)
+        
+        logger.info(f"Retrieved {len(diverse_results)} high-quality results from {len(search_result)} initial results")
+        
+        return diverse_results[:limit]  # Return only the requested number
         
     except Exception as e:
-        logger.error(f"Error in single collection search: {e}")
+        logger.error(f"Error in enhanced collection search: {e}")
         return []
 
+
+def get_source_info(file_name: str) -> tuple:
+    """Get source group and description based on file name"""
+    if file_name in ["RAG1.pdf", "RAG1_1.xlsx"]:
+        return "Group 1", "ICD-10 Guidelines"
+    elif file_name in ["RAG2.xlsx", "RAG2_1.pdf", "RAG2_2.pdf", "RAG2_3.pdf"]:
+        return "Group 2", "ICD-10 Index"
+    elif file_name in ["RAG3.csv"]:
+        return "Group 3", "ICD-10 Tabular List"
+    else:
+        return "Unknown", "Unknown"
+
+def apply_source_diversity(results: List[Dict[str, Any]], target_count: int) -> List[Dict[str, Any]]:
+    """Apply diversity filtering to ensure balanced representation from different sources"""
+    if len(results) <= target_count:
+        return results
+    
+    # Group by source
+    source_groups = {}
+    for result in results:
+        source = result["source_group"]
+        if source not in source_groups:
+            source_groups[source] = []
+        source_groups[source].append(result)
+    
+    # Calculate target per source (balanced approach)
+    sources = list(source_groups.keys())
+    results_per_source = max(1, target_count // len(sources))
+    remainder = target_count % len(sources)
+    
+    diverse_results = []
+    
+    # Take top results from each source
+    for i, source in enumerate(sources):
+        source_results = source_groups[source]
+        take_count = results_per_source + (1 if i < remainder else 0)
+        diverse_results.extend(source_results[:take_count])
+    
+    # Sort final results by relevance
+    diverse_results.sort(key=lambda x: x["relevance_score"], reverse=True)
+    
+    return diverse_results
+
+
 def organize_rag_results_by_source(rag_results: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Organize RAG results by source type for the new prompt format"""
+    """Organize RAG results by source type with length limits"""
     organized = {
         "guideline_context": "",
         "index_context": "",
         "tabular_context": ""
     }
     
+    # Use config value for max section length
+    MAX_LENGTH_PER_SECTION = RAG_CONFIG["MAX_SECTION_LENGTH"]
+    
     for result in rag_results:
         source_group = result.get("source_group", "")
-        text = result.get("text", "")
+        text = result.get("text", "").strip()
+        
+        # Truncate very long texts using config
+        if len(text) > RAG_CONFIG["MAX_TEXT_LENGTH"]:
+            text = text[:RAG_CONFIG["MAX_TEXT_LENGTH"]] + "..."
         
         if source_group == "Group 1":  # Guidelines
-            organized["guideline_context"] += f"{text}\n\n"
+            if len(organized["guideline_context"]) + len(text) < MAX_LENGTH_PER_SECTION:
+                organized["guideline_context"] += f"{text}\n\n"
         elif source_group == "Group 2":  # Index
-            organized["index_context"] += f"{text}\n\n"
+            if len(organized["index_context"]) + len(text) < MAX_LENGTH_PER_SECTION:
+                organized["index_context"] += f"{text}\n\n"
         elif source_group == "Group 3":  # Tabular List
-            organized["tabular_context"] += f"{text}\n\n"
+            if len(organized["tabular_context"]) + len(text) < MAX_LENGTH_PER_SECTION:
+                organized["tabular_context"] += f"{text}\n\n"
     
-    # Clean up trailing newlines
+    # Clean up and provide fallback
     for key in organized:
         organized[key] = organized[key].strip()
         if not organized[key]:
@@ -542,9 +859,17 @@ async def chat(request: ChatRequest):
             logger.info(f"Rephrased query: {rephrased_query}")
             
             # Search using the rephrased query
-            rag_results = search_single_collection_with_filtering(rephrased_query, limit=9)
+            enhanced_query = enhance_query_for_retrieval(rephrased_query)
             
-            logger.info(f"Retrieved {len(rag_results)} unique results from RAG sources")
+            # Search using the enhanced rephrased query with config limit
+            rag_results = search_single_collection_with_filtering(enhanced_query)  # Uses RAG_CONFIG["MAX_RESULTS"]
+            
+            logger.info(f"Retrieved {len(rag_results)} high-quality results from RAG sources")
+            
+            # If we don't have enough high-quality results, try with original query
+            if len(rag_results) < 2:
+                logger.info("Trying with original rephrased query...")
+                rag_results = search_single_collection_with_filtering(rephrased_query, limit=3)
             
             # Generate response with the new RAG processing prompt
             answer = generate_rag_response_with_context(
