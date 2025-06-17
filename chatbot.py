@@ -148,8 +148,18 @@ def get_gemini_embedding(text: str) -> List[float]:
         return result['embedding']
     except Exception as e:
         logger.error(f"Error generating Gemini embedding: {e}")
-        # Fallback: return a zero vector of appropriate dimension (768 for text-embedding-004)
-        return [0.0] * 768
+        # Add retry logic instead of zero vector
+        import time
+        time.sleep(1)  # Brief delay
+        try:
+            result = genai.embed_content(
+                model="models/text-embedding-004",
+                content=text,
+                task_type="retrieval_query"
+            )
+            return result['embedding']
+        except:
+            raise Exception("Failed to generate embedding after retry")
 
 def generate_gemini_response(messages: List[Dict[str, str]], temperature: float = 0.5, max_tokens: int = 2048) -> str:
     """Generate response using Gemini Flash 2.0"""
@@ -470,10 +480,12 @@ def enhance_query_for_retrieval(query: str) -> str:
         
         # If the query doesn't contain coding-specific terms, add them
         if not any(term in enhanced_query for term in icd_context_terms):
-            # Check if it's asking for codes
-            if any(phrase in enhanced_query for phrase in ['what are the', 'correct codes', 'icd codes']):
-                enhanced_query += ' icd-10 code diagnosis'
-        
+            # Always add context for medical queries in a consistent way
+            if any(phrase in enhanced_query for phrase in ['what are the', 'correct codes', 'icd codes', 'code for']):
+                enhanced_query += ' icd-10 diagnosis code'
+            elif 'diagnosis' not in enhanced_query:
+                enhanced_query += ' diagnosis'
+                
         return enhanced_query
         
     except Exception as e:
@@ -530,6 +542,17 @@ def structure_user_input_with_context(question: str, conversation_context: Dict[
         logger.error(f"Error rephrasing user input: {e}")
         return question
 
+
+
+def normalize_query(query: str) -> str:
+    """Normalize query for consistent processing"""
+    import re
+    # Convert to lowercase, remove extra spaces, normalize punctuation
+    normalized = re.sub(r'\s+', ' ', query.strip().lower())
+    normalized = re.sub(r'[^\w\s\-\.]', ' ', normalized)
+    return normalized.strip()
+
+
 def search_single_collection_with_filtering(rephrased_query: str, limit: int = None) -> List[Dict[str, Any]]:
     """Enhanced search with improved filtering and relevance scoring"""
     if limit is None:
@@ -540,7 +563,8 @@ def search_single_collection_with_filtering(rephrased_query: str, limit: int = N
         query_embedding = get_gemini_embedding(rephrased_query)
         
         # Search with higher initial limit for better filtering
-        initial_limit = min(50, limit * 10)  # Get more results initially
+        # Make initial_limit consistent:
+        initial_limit = 30  # Fixed value instead of min(50, limit * 10)
         
         search_result = qdrant_client.search(
             collection_name="Medical_Coder",
@@ -549,6 +573,8 @@ def search_single_collection_with_filtering(rephrased_query: str, limit: int = N
             score_threshold=RAG_CONFIG["SIMILARITY_THRESHOLD"]  # Use config value
         )
         
+        # In search_single_collection_with_filtering(), after the try block:
+        rephrased_query = normalize_query(rephrased_query)
         # Process and score results
         processed_results = []
         seen_texts = set()
@@ -559,17 +585,18 @@ def search_single_collection_with_filtering(rephrased_query: str, limit: int = N
             # Skip empty or very short content using config
             if len(text_content) < RAG_CONFIG["MIN_TEXT_LENGTH"]:
                 continue
-            
-            # Truncate text if it exceeds max length
-            if len(text_content) > RAG_CONFIG["MAX_TEXT_LENGTH"]:
-                text_content = text_content[:RAG_CONFIG["MAX_TEXT_LENGTH"]] + "..."
-            
-            # Create hash for deduplication
+
             import hashlib
-            text_hash = hashlib.md5(text_content.encode()).hexdigest()
-            
-            if text_hash not in seen_texts:
+            original_text = result.payload.get("text", "").strip()
+            text_hash = hashlib.md5(original_text.encode()).hexdigest()
+
+            if text_hash not in seen_texts and len(original_text) >= RAG_CONFIG["MIN_TEXT_LENGTH"]:
                 seen_texts.add(text_hash)
+                
+                # NOW truncate for display
+                text_content = original_text
+                if len(text_content) > RAG_CONFIG["MAX_TEXT_LENGTH"]:
+                    text_content = text_content[:RAG_CONFIG["MAX_TEXT_LENGTH"]] + "..."
                 
                 # Calculate enhanced relevance score
                 relevance_score = calculate_relevance_score(
@@ -635,7 +662,8 @@ def apply_source_diversity(results: List[Dict[str, Any]], target_count: int) -> 
         source_groups[source].append(result)
     
     # Calculate target per source (balanced approach)
-    sources = list(source_groups.keys())
+    # Sort sources for consistent ordering:
+    sources = sorted(source_groups.keys())  # Add sort here
     results_per_source = max(1, target_count // len(sources))
     remainder = target_count % len(sources)
     
