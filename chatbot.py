@@ -127,7 +127,7 @@ DOCUMENT_GROUPS = {
 RAG_CONFIG = {
     "MAX_RESULTS": 9,           # Maximum results to retrieve
     "MIN_TEXT_LENGTH": 33,      # Minimum text length for quality filtering
-    "SIMILARITY_THRESHOLD": 0.544, # Minimum similarity score
+    "SIMILARITY_THRESHOLD": 0.6, # Minimum similarity score
     "MAX_SECTION_LENGTH": 1200, # Maximum length per source section
     "MAX_TEXT_LENGTH": 500      # Maximum length per individual result
 }
@@ -534,7 +534,7 @@ def structure_user_input_with_context(question: str, conversation_context: Dict[
             {"role": "user", "content": user_message}
         ]
 
-        rephrased_query = generate_gemini_response(messages, temperature=0.3, max_tokens=512)
+        rephrased_query = generate_gemini_response(messages, temperature=0.2, max_tokens=512)
         
         return rephrased_query.strip()
 
@@ -543,6 +543,101 @@ def structure_user_input_with_context(question: str, conversation_context: Dict[
         return question
 
 
+
+
+def extract_structured_query_intent(question: str, rephrased_query: str) -> Dict[str, Any]:
+    """Extract structured query intent for CSV/Excel lookups with improved parsing - FIXED VERSION"""
+    import re
+    
+    query_intent = {
+        "is_structured_lookup": False,
+        "lookup_type": None,
+        "search_terms": [],
+        "target_columns": [],
+        "exact_match": False,
+        "original_query": question  # Store original query for reference
+    }
+    
+    # IMPROVED: More comprehensive code patterns
+    code_patterns = [
+        r'\b[A-Z]\d{2}(?:\.\d{1,3})?\b',  # ICD-10 codes like A92.5
+        r'\b[A-Z]\d{2}\b',  # ICD-10 codes without decimal like A92
+        r'\blookup\s+code\b',
+        r'\bcode\s+for\b',
+        r'\bfind\s+code\b',
+        r'\bsearch\s+for\s+[A-Z]\d{2}',  # "search for A92.5"
+    ]
+    
+    # Enhanced column references with more variations
+    column_references = {
+        'code description': ['Code Description', 'Description'],
+        'keyword': ['Keyword for this Code', 'Keyword'],
+        'synonym': ['Synonym'],
+        'excludes1': ['Excludes1 Code(s)', 'Excludes1', 'excludes 1'],
+        'excludes2': ['Excludes2 Code(s)', 'Excludes2', 'excludes 2'], 
+        'includes': ['Includes Code(s)', 'Includes'],
+        'laterality': ['Laterality'],
+        'specificity': ['Specificity', 'Gender Specificity', 'Age Specificity'],
+        'code first': ['Code First']
+    }
+    
+    question_lower = question.lower()
+    rephrased_lower = rephrased_query.lower()
+    
+    # IMPROVED: Better code extraction
+    extracted_codes = []
+
+    all_texts = [question.upper(), rephrased_query.upper()]
+    for text in all_texts:
+        for pattern in code_patterns:
+            matches = re.findall(pattern, text)
+            extracted_codes.extend(matches)
+
+    
+    # Remove duplicates and ensure we have valid codes
+    # Only keep the most specific version (e.g., R98.5 over R98)
+    extracted_codes = list(set(extracted_codes))
+
+    # Filter out base codes if more specific ones are present
+    specific_codes = set(c for c in extracted_codes if '.' in c)
+    if specific_codes:
+        extracted_codes = [c for c in extracted_codes if '.' in c or all(not c.startswith(sc.split('.')[0]) for sc in specific_codes)]
+
+
+    
+    if extracted_codes:
+        query_intent["is_structured_lookup"] = True
+        query_intent["lookup_type"] = "code_lookup"
+        query_intent["search_terms"] = extracted_codes
+        logger.info(f"Extracted codes for structured lookup: {extracted_codes}")
+    
+    # Check for column-specific queries with improved matching
+    for col_ref, col_names in column_references.items():
+        if col_ref in question_lower or col_ref in rephrased_lower:
+            query_intent["is_structured_lookup"] = True
+            query_intent["target_columns"].extend(col_names)
+            
+            # Special handling for excludes queries
+            if 'excludes' in col_ref:
+                query_intent["lookup_type"] = "excludes_lookup"
+    
+    # Check for exact match indicators
+    exact_match_indicators = ['exact', 'specific', 'precise', 'find the code', 'what are the excludes']
+    if any(indicator in question_lower for indicator in exact_match_indicators):
+        query_intent["exact_match"] = True
+    
+    # IMPROVED: Better detection of structured queries
+    # If we have specific ICD codes mentioned, it's likely a structured lookup
+    if extracted_codes:
+        query_intent["is_structured_lookup"] = True
+        
+    # If looking for specific information about codes, it's structured
+    if any(phrase in question_lower for phrase in [
+        'what is', 'what are', 'find', 'lookup', 'search for', 'get', 'show me'
+    ]) and extracted_codes:
+        query_intent["is_structured_lookup"] = True
+    
+    return query_intent
 
 def normalize_query(query: str) -> str:
     """Normalize query for consistent processing"""
@@ -593,10 +688,16 @@ def search_single_collection_with_filtering(rephrased_query: str, limit: int = N
             if text_hash not in seen_texts and len(original_text) >= RAG_CONFIG["MIN_TEXT_LENGTH"]:
                 seen_texts.add(text_hash)
                 
-                # NOW truncate for display
-                text_content = original_text
-                if len(text_content) > RAG_CONFIG["MAX_TEXT_LENGTH"]:
-                    text_content = text_content[:RAG_CONFIG["MAX_TEXT_LENGTH"]] + "..."
+            # For structured data, preserve more content
+            text_content = original_text
+            max_length = RAG_CONFIG["MAX_TEXT_LENGTH"]
+
+            # Check if this looks like structured data (CSV format)
+            if any(indicator in text_content for indicator in ['|', 'Row ', 'Lookup Code:', 'ICD Code:']):
+                max_length = RAG_CONFIG["MAX_TEXT_LENGTH"] * 3  # Allow 3x length for structured data
+
+            if len(text_content) > max_length:
+                text_content = text_content[:max_length] + "..."
                 
                 # Calculate enhanced relevance score
                 relevance_score = calculate_relevance_score(
@@ -636,6 +737,199 @@ def search_single_collection_with_filtering(rephrased_query: str, limit: int = N
         logger.error(f"Error in enhanced collection search: {e}")
         return []
 
+
+def search_structured_data(query_intent: Dict[str, Any], rephrased_query: str, limit: int = None) -> List[Dict[str, Any]]:
+    """Search structured data (CSV/Excel) with improved code matching - FIXED VERSION"""
+    if limit is None:
+        limit = RAG_CONFIG["MAX_RESULTS"]
+    
+    try:
+        # Get initial results from vector search with lower threshold for structured data
+        query_embedding = get_gemini_embedding(rephrased_query)
+        
+        # Use a much lower threshold for structured data to ensure we get results
+        search_result = qdrant_client.search(
+            collection_name="Medical_Coder",
+            query_vector=query_embedding,
+            limit=200,  # Increased to get more results for better filtering
+            score_threshold=0.3  # Even lower threshold to ensure we get all potential matches
+        )
+        
+        structured_results = []
+        
+        # Extract target codes from query for better matching
+        target_codes = set()
+        if query_intent.get("search_terms"):
+            target_codes.update(code.upper() for code in query_intent["search_terms"])
+        
+        # Also extract codes from original query
+        import re
+        original_codes = re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', query_intent.get("original_query", "").upper())
+        target_codes.update(original_codes)
+        # Remove base codes if more specific codes exist
+        more_specific = {code for code in target_codes if '.' in code}
+        if more_specific:
+            target_codes = {code for code in target_codes if '.' in code or all(not code.startswith(ms.split('.')[0]) for ms in more_specific)}
+
+        
+        logger.info(f"Looking for codes: {target_codes}")
+        
+        for result in search_result:
+            metadata = result.payload.get("metadata", {})
+            file_name = metadata.get("file_name", "")
+            text_content = result.payload.get("text", "").strip()
+            
+            # Focus on CSV and Excel files
+            if not (file_name.endswith('.csv') or file_name.endswith('.xlsx')):
+                continue
+            
+            # Check if any target codes are in this result - IMPROVED MATCHING
+            text_upper = text_content.upper()
+            code_match = False
+            matched_code = None
+            
+            import re
+
+            # Try matching target codes
+            for code in target_codes:
+                # PRIORITY 1: Exact regex match using ICD CODE or LOOKUP CODE label
+                pattern = rf'\b(?:ICD CODE|LOOKUP CODE):\s*{re.escape(code)}\b'
+                if re.search(pattern, text_upper):
+                    code_match = True
+                    matched_code = code
+                    logger.info(f"✅ Regex exact match found for {code}")
+                    break
+
+                # PRIORITY 2: Exact match in Lookup Code field (fallback)
+                if f"LOOKUP CODE: {code}" in text_upper:
+                    code_match = True
+                    matched_code = code
+                    logger.info(f"✅ Found exact LOOKUP CODE match for {code}")
+                    break
+
+                # PRIORITY 3: Exact match in ICD Code field
+                elif f"ICD CODE: {code}" in text_upper:
+                    code_match = True
+                    matched_code = code
+                    logger.info(f"✅ Found exact ICD CODE match for {code}")
+                    break
+
+                # PRIORITY 4: Pipe-delimited match (e.g., | M25.649 |)
+                elif f"| {code} |" in text_upper:
+                    code_match = True
+                    matched_code = code
+                    logger.info(f"✅ Found pipe-separated match for {code}")
+                    break
+
+            # ✅ Reject partial matches (e.g., M25 when M25.649 was requested)
+            if matched_code and matched_code not in target_codes:
+                logger.info(f"❌ Rejected partial match: {matched_code} not in {target_codes}")
+                continue
+
+
+            # If looking for excludes and this result has excludes info, include it
+            excludes_match = False
+            if query_intent.get("lookup_type") == "excludes_lookup":
+                if "EXCLUDES1 CODE(S):" in text_upper or "EXCLUDES2 CODE(S):" in text_upper:
+                    excludes_match = True
+            
+            # Calculate enhanced scoring
+            relevance_score = calculate_structured_relevance(
+                query_intent, text_content, result.score
+            )
+            
+            # Boost score significantly for exact code matches
+            if code_match:
+                relevance_score = min(relevance_score + 1.0, 1.0)
+
+            
+            # Include if we have a good match
+            if code_match or excludes_match or relevance_score > 0.6:  # Raised threshold
+                source_group, source_description = get_source_info(file_name)
+                
+                structured_results.append({
+                    "text": text_content,
+                    "metadata": metadata,
+                    "score": result.score,
+                    "relevance_score": relevance_score,
+                    "source_group": source_group,
+                    "source_priority": 1,
+                    "source_description": source_description,
+                    "is_structured": True,
+                    "code_match": code_match,
+                    "matched_code": matched_code  # Track which code was matched
+                })
+        
+        # Sort by relevance and code match priority
+        structured_results.sort(key=lambda x: (x["code_match"], x["relevance_score"]), reverse=True)
+        
+        logger.info(f"Structured search found {len(structured_results)} results")
+
+        # ✅ Final strict filter: if exact code match (like M25.649) exists, drop partial ones like M25
+        strict_matches = [r for r in structured_results if r.get("matched_code") in target_codes]
+        if any(r.get("matched_code") and '.' in r.get("matched_code") for r in strict_matches):
+            structured_results = strict_matches
+            logger.info("✅ Filtered out base code matches because more specific matches exist")
+
+        return structured_results[:limit]
+        
+    except Exception as e:
+        logger.error(f"Error in structured data search: {e}")
+        return []
+
+
+def calculate_structured_relevance(query_intent: Dict[str, Any], text_content: str, base_score: float) -> float:
+    """Calculate relevance score for structured data with improved code matching - FIXED VERSION"""
+    try:
+        relevance_score = base_score
+        
+        # Extract ICD codes from query using regex
+        import re
+        query_codes = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', query_intent.get("original_query", "").upper()))
+        
+        # Also check search terms
+        if query_intent.get("search_terms"):
+            for term in query_intent["search_terms"]:
+                query_codes.add(term.upper())
+        
+        # Look for exact ICD code matches in the structured data - IMPROVED MATCHING
+        text_upper = text_content.upper()
+        for code in query_codes:
+            # PRIORITY 1: Check for exact code match in Lookup Code field (MAIN FIX)
+            if f"LOOKUP CODE: {code}" in text_upper:
+                relevance_score += 0.7  # Highest boost for Lookup Code match
+                break
+            # PRIORITY 2: Check for exact code match in ICD Code field
+            elif f"ICD CODE: {code}" in text_upper:
+                relevance_score += 0.6  # High boost for ICD Code match
+                break
+            # PRIORITY 3: Check for pipe-separated format
+            elif f"| {code} |" in text_upper:
+                relevance_score += 0.5  # Good boost for structured format
+                break
+        
+        # Boost for target column matches (like "Excludes1")
+        if query_intent.get("target_columns"):
+            for col in query_intent["target_columns"]:
+                if col.upper() in text_upper:
+                    relevance_score += 0.3
+        
+        # Look for specific field queries (like "excludes1")
+        excludes_query = any(term in query_intent.get("original_query", "").lower() 
+                           for term in ["excludes1", "excludes 1", "excludes1 code"])
+        if excludes_query and "EXCLUDES1 CODE(S):" in text_upper:
+            relevance_score += 0.4
+        
+        # Boost for structured content indicators
+        structured_indicators = ['LOOKUP CODE:', 'ICD CODE:', 'CODE DESCRIPTION:', 'ROW ']
+        if any(indicator in text_upper for indicator in structured_indicators):
+            relevance_score += 0.2
+        
+        return min(relevance_score, 1.0)
+        
+    except Exception as e:
+        logger.error(f"Error calculating structured relevance: {e}")
+        return base_score
 
 def get_source_info(file_name: str) -> tuple:
     """Get source group and description based on file name"""
@@ -681,12 +975,14 @@ def apply_source_diversity(results: List[Dict[str, Any]], target_count: int) -> 
     return diverse_results
 
 
+# Add this at the beginning of the organize_rag_results_by_source function:
 def organize_rag_results_by_source(rag_results: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Organize RAG results by source type with length limits"""
+    """Organize RAG results by source type with length limits and structured data handling"""
     organized = {
         "guideline_context": "",
         "index_context": "",
-        "tabular_context": ""
+        "tabular_context": "",
+        "structured_data": ""  # Add this new field
     }
     
     # Use config value for max section length
@@ -695,12 +991,18 @@ def organize_rag_results_by_source(rag_results: List[Dict[str, Any]]) -> Dict[st
     for result in rag_results:
         source_group = result.get("source_group", "")
         text = result.get("text", "").strip()
+        is_structured = result.get("is_structured", False)
         
         # Truncate very long texts using config
         if len(text) > RAG_CONFIG["MAX_TEXT_LENGTH"]:
             text = text[:RAG_CONFIG["MAX_TEXT_LENGTH"]] + "..."
         
-        if source_group == "Group 1":  # Guidelines
+        # Handle structured data separately - prioritize complete data
+        if is_structured:
+            # For structured data, allow longer sections to preserve complete records
+            if len(organized["structured_data"]) + len(text) < (MAX_LENGTH_PER_SECTION * 2):
+                organized["structured_data"] += f"{text}\n\n"
+        elif source_group == "Group 1":  # Guidelines
             if len(organized["guideline_context"]) + len(text) < MAX_LENGTH_PER_SECTION:
                 organized["guideline_context"] += f"{text}\n\n"
         elif source_group == "Group 2":  # Index
@@ -786,23 +1088,53 @@ def generate_rag_response_with_context(user_question: str, rephrased_query: str,
     - Validate sequencing, specificity, and inclusion/exclusion notes.
     - Double-check that redundant codes are not included when a combination code exists.
 
+**Structured Data Handling**
+11. **CSV/Excel Data Interpretation**
+    - When processing structured data (CSV/Excel files), interpret the content as tabular data with specific columns
+    - For RAG3.csv (Tabular List): Use columns like 'ICD Code', 'Code Description', 'Keyword for this Code', 'Synonym', 'Excludes1/2', 'Includes', etc.
+    - For Excel files with Q&A format: Interpret as question-answer pairs for guidelines and index lookups
+    - Present structured data in a clear, organized format
+
+12. **Code Lookup Enhancement**
+    - When a specific ICD code is mentioned, prioritize exact matches from the tabular data
+    - Cross-reference code descriptions, keywords, and synonyms for comprehensive answers
+    - Include relevant excludes, includes, and coding instructions when available from structured data
+
 **Response Format**:
-- **Answer**: Provide a concise response with ICD-10 code(s) highlighted (e.g., **E11.9**) or relevant information.
+**Response Format**:
+- **Answer**: Provide a concise response with ICD-10 code(s) highlighted (e.g., **E11.9**) or relevant information. For structured data queries, extract and present the exact field values.
 - **Rationale**: Explain the response, referencing the Guideline, Include/Exclude notes, Code also/Code first/Use Additional Code instructions, and any relevant laterality, gender, or age specificity from the Tabular List.
 - **Clarification (if needed)**: Include a single question if clarification is needed for specificity or missing context; otherwise omit this section.
 - **Disclaimer**: Always include: "This answer is for informational purposes only. Please confirm with the latest ICD-10-CM guidelines or a certified medical coder."
 
 **Adhere to ICD-10-CM Guidelines**: Follow official coding conventions, including sequencing rules and specificity requirements, as outlined in the Guideline dataset.
 
-**Avoid Non-ICD-10 Content**: Do not include unrelated information (e.g., general health advice or CPT) unless supported by the datasets."""
+**Avoid Non-ICD-10 Content**: Do not include unrelated information (e.g., general health advice or CPT) unless supported by the datasets.
+
+**For Structured Data (CSV/Excel) Queries**:
+- When processing CSV/Excel data queries, ALWAYS prioritize and use the retrieved structured data from the RAG context
+- Do not rely on embedded knowledge when structured data is available
+- Present the structured data information clearly, referencing the specific data fields retrieved
+- If structured data context is provided, base your answer primarily on that data
+
+**CSV Data Format Interpretation**:
+When you see the ICD-10 code data in the following format:
+
+"Row 668: Lookup Code: A92.5 | ICD Code: A92.5 | Code Description: Zika virus disease | Excludes1 Code(s): P35.4, B33.1"
+
+Your job is to extract the relevant field based on the user's question. For example:
+- If the user asks "Excludes1 codes for A92.5", return: **P35.4, B33.1**
+
+Never say "No Excludes1 codes listed" unless the value after "Excludes1 Code(s):" is explicitly missing."""
 
         # Format conversation history
         conversation_history_text = format_conversation_history_for_prompt(conversation_history)
         
         # Organize RAG results by source
         organized_context = organize_rag_results_by_source(rag_results)
-        
-        # Create the user message with the template format
+
+
+        # Update the user_message in generate_rag_response_with_context:
         user_message = f"""**Conversation History**: {conversation_history_text}
 
 **Rephrased User Query**: {rephrased_query}
@@ -813,7 +1145,9 @@ def generate_rag_response_with_context(user_question: str, rephrased_query: str,
 
 - **Alphabetic Index**: {organized_context['index_context']}
 
-- **Tabular List**: {organized_context['tabular_context']}"""
+- **Tabular List**: {organized_context['tabular_context']}
+
+- **Structured Data**: {organized_context['structured_data']}"""
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -825,6 +1159,7 @@ def generate_rag_response_with_context(user_question: str, rephrased_query: str,
     except Exception as e:
         logger.error(f"Error generating RAG response: {e}")
         return "I'm sorry, I encountered an error while generating your answer. Please try again."
+    
 
 def generate_general_response(question: str, conversation_history: List[Dict[str, str]] = None) -> str:
     """Generate response for non-medical queries with conversation awareness"""
@@ -915,7 +1250,6 @@ async def chat(request: ChatRequest):
         
         # Extract conversation context
         conversation_context = extract_conversation_context(conversation_history)
-        
         # Determine if this is a follow-up query
         is_follow_up = is_follow_up_query(request.question, conversation_history)
         
@@ -926,33 +1260,143 @@ async def chat(request: ChatRequest):
             answer = generate_general_response(request.question, conversation_history)
             rag_results = []
             rephrased_query = None
+        # Replace this section in the chat endpoint:
         else:
             # Rephrase the user input using the new preprocessing prompt
             rephrased_query = structure_user_input_with_context(request.question, conversation_context, conversation_history)
             logger.info(f"Rephrased query: {rephrased_query}")
             
-            # Search using the rephrased query
-            enhanced_query = enhance_query_for_retrieval(rephrased_query)
+            # Extract structured query intent
+            query_intent = extract_structured_query_intent(request.question, rephrased_query)
             
-            # Search using the enhanced rephrased query with config limit
-            rag_results = search_single_collection_with_filtering(enhanced_query)  # Uses RAG_CONFIG["MAX_RESULTS"]
+            rag_results = []  # ✅ Initialize early
             
-            logger.info(f"Retrieved {len(rag_results)} high-quality results from RAG sources")
-            
-            # If we don't have enough high-quality results, try with original query
-            if len(rag_results) < 2:
-                logger.info("Trying with original rephrased query...")
-                rag_results = search_single_collection_with_filtering(rephrased_query, limit=3)
-            
-            # Generate response with the new RAG processing prompt
-            answer = generate_rag_response_with_context(
-                request.question, 
-                rephrased_query, 
-                rag_results, 
-                conversation_history, 
-                conversation_context
-            )
-        
+            # Choose search strategy based on query intent
+            if query_intent["is_structured_lookup"]:
+                logger.info("Using structured data search with 0.8 threshold")
+                rag_results = search_structured_data(query_intent, rephrased_query)
+
+                logger.info(f"Structured search returned {len(rag_results)} results")
+                
+                # ✅ Early extraction and direct response if exact match found
+                if rag_results and query_intent.get("search_terms") and len(query_intent["search_terms"]) > 0 and query_intent["search_terms"][0]:
+                    logger.info(f"Search terms: {query_intent['search_terms']}")
+                    logger.info(f"First search term: {query_intent['search_terms'][0]}")
+                    matched_code = query_intent["search_terms"][0].upper()
+
+                    structured_match = next(
+                        (r for r in rag_results 
+                        if r.get("is_structured") and (r.get("matched_code") or "").upper() == matched_code),
+                        None
+                    )
+
+                                        
+                    if structured_match:
+                        import re
+                        text = structured_match.get("text", "").strip()
+
+                        # Try to extract Excludes1 codes
+                        excludes1_match = re.search(r"Lookup Code:\s*{}\s*\|.*?Excludes1 Code\(s\):\s*([^|]*)".format(re.escape(matched_code)), text, re.IGNORECASE | re.DOTALL)
+
+                        if excludes1_match and excludes1_match.group(1).strip():
+                            excludes1_value = excludes1_match.group(1).strip()
+                        else:
+                            excludes1_value = "No Excludes1 codes listed for this code."
+
+
+                        # Format answer
+                        formatted_answer = "\n\n".join([
+                            f"**Answer**: Excludes1 codes for {matched_code} are: {excludes1_value}",
+                            f"**Rationale**: Extracted directly from the structured ICD-10 tabular entry for {matched_code}.",
+                            "**Clarification (if needed)**: N/A",
+                            "**Disclaimer**: This answer is for informational purposes only. Please confirm with the latest ICD-10-CM guidelines or a certified medical coder."
+                        ])
+
+                        await save_conversation_message(request.chat_id, request.user_id, request.question, formatted_answer)
+
+                        return ChatResponse(
+                            answer=formatted_answer,
+                            sources=[structured_match],
+                            structured_query={"rephrased_query": rephrased_query},
+                            conversation_context={
+                                "is_follow_up": is_follow_up,
+                                "conversation_length": len(conversation_history),
+                                "context_extracted": conversation_context
+                            }
+                        )
+                    else:
+                        # Safe extraction of matched_code with fallback
+                        matched_code = (
+                            query_intent["search_terms"][0].upper()
+                            if query_intent.get("search_terms") and len(query_intent["search_terms"]) > 0 and query_intent["search_terms"][0]
+                            else "UNKNOWN"
+                        )
+
+                        fallback_msg = "\n\n".join([
+                            f"**Answer**: No structured data found for ICD-10 code: {matched_code}",
+                            "**Rationale**: The code either does not exist in the structured database or lacks Excludes1 information.",
+                            "**Clarification (if needed)**: Please check if the code is spelled correctly or try another code.",
+                            "**Disclaimer**: This answer is for informational purposes only. Please confirm with the latest ICD-10-CM guidelines or a certified medical coder."
+                        ])
+
+                        await save_conversation_message(request.chat_id, request.user_id, request.question, fallback_msg)
+
+                        return ChatResponse(
+                            answer=fallback_msg,
+                            sources=rag_results[:1] if rag_results else [],
+                            structured_query={"rephrased_query": rephrased_query},
+                            conversation_context={
+                                "is_follow_up": is_follow_up,
+                                "conversation_length": len(conversation_history),
+                                "context_extracted": conversation_context
+                            }
+                        )
+                else:
+                    # Handle case where search_terms is empty or None
+                    fallback_msg = "\n\n".join([
+                        "**Answer**: Unable to identify a valid ICD-10 code from your query.",
+                        "**Rationale**: The query could not be parsed to extract a specific ICD-10 code.",
+                        "**Clarification (if needed)**: Please provide a specific ICD-10 code (e.g., 'J44.0', 'E11.9') for structured lookup.",
+                        "**Disclaimer**: This answer is for informational purposes only. Please confirm with the latest ICD-10-CM guidelines or a certified medical coder."
+                    ])
+
+                    await save_conversation_message(request.chat_id, request.user_id, request.question, fallback_msg)
+
+                    return ChatResponse(
+                        answer=fallback_msg,
+                        sources=[],
+                        structured_query={"rephrased_query": rephrased_query},
+                        conversation_context={
+                            "is_follow_up": is_follow_up,
+                            "conversation_length": len(conversation_history),
+                            "context_extracted": conversation_context
+                        }
+                    )
+
+                # Fallback to general search if structured failed
+                if len(rag_results) == 0:
+                    logger.info("No structured results found, trying general search")
+                    enhanced_query = enhance_query_for_retrieval(rephrased_query)
+                    rag_results = search_single_collection_with_filtering(enhanced_query, limit=3)
+            else:
+                # Use general search for non-structured medical queries
+                enhanced_query = enhance_query_for_retrieval(rephrased_query)
+                rag_results = search_single_collection_with_filtering(enhanced_query)
+
+            logger.info(f"Retrieved {len(rag_results)} results from RAG sources")
+
+            # ✅ Final fallback: Only generate answer if RAG results exist
+            if rag_results:
+                answer = generate_rag_response_with_context(
+                    request.question,
+                    rephrased_query,
+                    rag_results,
+                    conversation_history,
+                    conversation_context
+                )
+            else:
+                answer = "I'm sorry, I couldn't find relevant ICD-10 information for your query. Please verify the code or try rephrasing."
+
         # Save the conversation message
         await save_conversation_message(request.chat_id, request.user_id, request.question, answer)
         
