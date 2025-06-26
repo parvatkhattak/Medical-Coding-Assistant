@@ -104,19 +104,19 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Document groups and their collection names
 DOCUMENT_GROUPS = {
     "Group 1": {
-        "collection":"Medical_Coder",
+        "collection":"Medical_Coder_",
         "files": ["RAG1.pdf", "RAG1_1.xlsx"],
         "description": "ICD-10 Guidelines",
         "priority": 1
     },
     "Group 2": {
-        "collection":"Medical_Coder",
+        "collection":"Medical_Coder_",
         "files": ["RAG2.xlsx", "RAG2_1.pdf", "RAG2_2.pdf", "RAG2_3.pdf"],
         "description": "ICD-10 Index",
         "priority": 1
     },
     "Group 3": {
-        "collection":"Medical_Coder",
+        "collection":"Medical_Coder_",
         "files": ["RAG3.csv"],
         "description": "ICD-10 Tabular List",
         "priority": 1
@@ -662,7 +662,7 @@ def search_single_collection_with_filtering(rephrased_query: str, limit: int = N
         initial_limit = 30  # Fixed value instead of min(50, limit * 10)
         
         search_result = qdrant_client.search(
-            collection_name="Medical_Coder",
+            collection_name="Medical_Coder_",
             query_vector=query_embedding,
             limit=initial_limit,
             score_threshold=RAG_CONFIG["SIMILARITY_THRESHOLD"]  # Use config value
@@ -749,7 +749,7 @@ def search_structured_data(query_intent: Dict[str, Any], rephrased_query: str, l
         
         # Use a much lower threshold for structured data to ensure we get results
         search_result = qdrant_client.search(
-            collection_name="Medical_Coder",
+            collection_name="Medical_Coder_",
             query_vector=query_embedding,
             limit=200,  # Increased to get more results for better filtering
             score_threshold=0.3  # Even lower threshold to ensure we get all potential matches
