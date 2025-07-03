@@ -2,7 +2,7 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 import json
-
+import re
 from fastapi import FastAPI, Path
 import nltk
 from pydantic import BaseModel
@@ -42,7 +42,6 @@ def calculate_relevance_score(query_text: str, result_text: str, base_score: flo
             keyword_overlap = len(common_words) / len(query_words)
         
         # Boost score for exact medical code matches
-        import re
         query_codes = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', query_text.upper()))
         result_codes = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', result_text.upper()))
         
@@ -125,9 +124,9 @@ DOCUMENT_GROUPS = {
 
 
 RAG_CONFIG = {
-    "MAX_RESULTS": 9,           # Maximum results to retrieve
+    "MAX_RESULTS": 15,           # Maximum results to retrieve
     "MIN_TEXT_LENGTH": 33,      # Minimum text length for quality filtering
-    "SIMILARITY_THRESHOLD": 0.6, # Minimum similarity score
+    "SIMILARITY_THRESHOLD": 0.7, # Minimum similarity score
     "MAX_SECTION_LENGTH": 1200, # Maximum length per source section
     "MAX_TEXT_LENGTH": 500      # Maximum length per individual result
 }
@@ -270,7 +269,6 @@ def is_medical_query(question: str) -> bool:
     ]
     
     # Medical code patterns (ICD-10, CPT, etc.)
-    import re
     code_patterns = [
         r'\b[A-Z]\d{2}(?:\.\d{1,3})?\b',  # ICD-10 codes like A92.5
         r'\b[A-Z]\d{2}\b',  # ICD-10 codes without decimal like A92
@@ -383,7 +381,7 @@ def extract_conversation_context(conversation_history: List[Dict[str, str]]) -> 
         for i, message in enumerate(conversation_history):
             if message["role"] == "user":
                 # Extract potential medical codes mentioned
-                import re
+
                 code_patterns = [
                     r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b',  # ICD-10 codes
                     r'\b\d{5}(?:-\d{2})?\b'  # CPT codes
@@ -479,7 +477,6 @@ def enhance_query_for_retrieval(query: str) -> str:
                 enhanced_query = enhanced_query.replace(common_term, medical_term)
         
         # --- EVEN STRONGER: Expand "htn" and "ckd" queries for better RAG retrieval ---
-        import re
         if (("htn" in enhanced_query or "hypertension" in enhanced_query) and
             ("ckd" in enhanced_query or "chronic kidney disease" in enhanced_query)):
             # Try to extract CKD stage (allow "ckd3", "ckd 3", "stage 3", etc.)
@@ -600,7 +597,6 @@ def structure_user_input_with_context(question: str, conversation_context: Dict[
 
 def extract_structured_query_intent(question: str, rephrased_query: str) -> Dict[str, Any]:
     """Extract structured query intent for CSV/Excel lookups with improved parsing - FIXED VERSION"""
-    import re
     
     query_intent = {
         "is_structured_lookup": False,
@@ -697,7 +693,6 @@ def extract_structured_query_intent(question: str, rephrased_query: str) -> Dict
 
 def normalize_query(query: str) -> str:
     """Normalize query for consistent processing"""
-    import re
     # Convert to lowercase, remove extra spaces, normalize punctuation
     normalized = re.sub(r'\s+', ' ', query.strip().lower())
     normalized = re.sub(r'[^\w\s\-\.]', ' ', normalized)
@@ -730,7 +725,6 @@ def search_single_collection_with_filtering(rephrased_query: str, limit: int = N
         seen_texts = set()
 
         # --- NEW: Extract key terms for multi-condition queries ---
-        import re
         # Extract all ICD codes and key medical terms from the query
         code_terms = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', rephrased_query.upper()))
         # Also extract common disease/condition keywords
@@ -812,7 +806,7 @@ def search_structured_data(query_intent: Dict[str, Any], rephrased_query: str, l
         target_codes = set()
         if query_intent.get("search_terms"):
             target_codes.update(code.upper() for code in query_intent["search_terms"])
-        import re
+
         original_codes = re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', query_intent.get("original_query", "").upper())
         target_codes.update(original_codes)
         more_specific = {code for code in target_codes if '.' in code}
@@ -909,7 +903,7 @@ def calculate_structured_relevance(query_intent: Dict[str, Any], text_content: s
         relevance_score = base_score
         
         # Extract ICD codes from query using regex
-        import re
+    
         query_codes = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', query_intent.get("original_query", "").upper()))
         
         # Also check search terms
@@ -1186,7 +1180,7 @@ Never say "No Excludes1 codes listed" unless the value after "Excludes1 Code(s):
         ]
 
         # --- ENHANCED: Enforce Excludes1/2 logic, always keep the code that lists the other in its Excludes1 ---
-        import re
+    
         code_info = {}
         for result in rag_results:
             text = result.get("text", "")
@@ -1212,110 +1206,62 @@ Never say "No Excludes1 codes listed" unless the value after "Excludes1 Code(s):
                     codes_to_output.discard(code2)
 
         # Compose a context string from all RAG results, but only for allowed codes
-        # --- ENHANCED: For complex queries, ensure context for each symptom/condition ---
         context_lines = []
-        import re
-        # Extract all ICD codes and key medical terms from the rephrased query
-        code_terms = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', rephrased_query.upper()))
-        # Also extract common disease/condition keywords (expand as needed)
-        condition_terms = set(re.findall(r'\b(?:hypertension|htn|ckd|chronic kidney disease|diabetes|sepsis|pneumonia|stroke|fracture|infection|cancer|tumor|syndrome|disorder|injury|wound|acute|chronic|malignant|benign|myocardial|infarction|respiratory|cardiovascular|gastrointestinal|neurological|psychiatric|orthopedic|dermatological|ophthalmological|urological|surgery|operation|biopsy|transplant|dialysis|chemotherapy|radiation|therapy|rehabilitation|medication|antibiotic|anesthesia|ventilator|icu|bacterial|viral|fungal|parasitic|infectious|inflammatory|autoimmune|genetic|congenital|acquired|traumatic|degenerative|metastatic|hemorrhage|thrombosis|embolism|staphylococcus|streptococcus|mrsa|pneumococcus|influenza|covid|hepatitis|tuberculosis|malaria|hiv|aids|alzheimer|parkinson|asthma|copd|emphysema|shock|failure|manifestation|exacerbation)\b', rephrased_query.lower()))
-        # For each code/condition, collect relevant context from RAG results
-        for code_or_term in sorted(code_terms | condition_terms):
-            for result in rag_results:
-                text = result.get("text", "")
+        for result in rag_results:
+            text = result.get("text", "").strip()
+            codes_in_chunk = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', text))
+            # Only include info for codes that are not excluded
+            if codes_in_chunk & codes_to_output:
                 file_name = result.get("metadata", {}).get("file_name", "")
-                # Only include chunks that are directly relevant to the code_or_term (symptom/condition)
-                # Discard chunks that do not mention the code_or_term
-                if code_or_term.upper() in text.upper() or code_or_term.lower() in text.lower():
-                    # Extract code(s) in chunk
-                    codes_in_chunk = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', text))
-                    # Only include info for codes that are not excluded, or if chunk is about a symptom/condition with no code
-                    if (not codes_to_output or codes_in_chunk & codes_to_output or not codes_in_chunk):
-                        code_matches = ", ".join(sorted(codes_in_chunk & codes_to_output)) if codes_to_output else ", ".join(sorted(codes_in_chunk))
-                        desc = ""
-                        detail = ""
-                        # Try to extract the most relevant description (prefer exact code match)
-                        for code in sorted(codes_in_chunk & codes_to_output) if codes_to_output else sorted(codes_in_chunk):
-                            desc_match = re.search(rf"{code}.*?Code Description:\s*([^|]*)", text)
-                            if not desc_match:
-                                desc_match = re.search(r"Code Description:\s*([^|]*)", text)
-                            if desc_match:
-                                desc = desc_match.group(1).strip()
-                                break
-                        # Try to extract the most relevant answer/detail (prefer exact code match)
-                        for code in sorted(codes_in_chunk & codes_to_output) if codes_to_output else sorted(codes_in_chunk):
-                            ans_match = re.search(rf"{code}.*?Answer:\s*(.*)", text)
-                            if not ans_match:
-                                ans_match = re.search(r"Answer:\s*(.*)", text)
-                            if ans_match:
-                                detail = ans_match.group(1).strip()
-                                break
-                        # Only add if the chunk is about the current code_or_term (symptom/condition)
-                        # and not just a generic chunk
-                        if code_matches or code_or_term.lower() in text.lower():
-                            context_lines.append(f"Codes: {code_matches}" if code_matches else f"Symptom/Condition: {code_or_term}")
-                        if desc:
-                            context_lines.append(f"Description: {desc}")
-                        if detail:
-                            context_lines.append(f"Detail: {detail}")
-                        if file_name:
-                            context_lines.append(f"Source: {file_name}")
-        # Fallback: if nothing matched, keep old logic
-        if not context_lines:
-            # Compose a context string from all RAG results, but only for allowed codes
-            for result in rag_results:
-                text = result.get("text", "").strip()
-                codes_in_chunk = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', text))
-                if codes_in_chunk & codes_to_output:
-                    file_name = result.get("metadata", {}).get("file_name", "")
-                    code_matches = ", ".join(sorted(codes_in_chunk & codes_to_output))
-                    desc = ""
-                    detail = ""
-                    for code in sorted(codes_in_chunk & codes_to_output):
-                        desc_match = re.search(rf"{code}.*?Code Description:\s*([^|]*)", text)
-                        if not desc_match:
-                            desc_match = re.search(r"Code Description:\s*([^|]*)", text)
-                        if desc_match:
-                            desc = desc_match.group(1).strip()
-                            break
-                    for code in sorted(codes_in_chunk & codes_to_output):
-                        ans_match = re.search(rf"{code}.*?Answer:\s*(.*)", text)
-                        if not ans_match:
-                            ans_match = re.search(r"Answer:\s*(.*)", text)
-                        if ans_match:
-                            detail = ans_match.group(1).strip()
-                            break
-                    if code_matches:
-                        context_lines.append(f"Codes: {code_matches}")
-                    if desc:
-                        context_lines.append(f"Description: {desc}")
-                    if detail:
-                        context_lines.append(f"Detail: {detail}")
-                    if file_name:
-                        context_lines.append(f"Source: {file_name}")
-            if not context_lines:
-                context_lines.append("No ICD-10 codes found in the retrieved data.")
+                code_matches = ", ".join(sorted(codes_in_chunk & codes_to_output))
+                # --- NEW: Add more accurate extraction for description and details ---
+                desc = ""
+                detail = ""
+                # Try to extract the most relevant description (prefer exact code match)
+                for code in sorted(codes_in_chunk & codes_to_output):
+                    desc_match = re.search(rf"{code}.*?Code Description:\s*([^|]*)", text)
+                    if not desc_match:
+                        desc_match = re.search(r"Code Description:\s*([^|]*)", text)
+                    if desc_match:
+                        desc = desc_match.group(1).strip()
+                        break
+                # Try to extract the most relevant answer/detail (prefer exact code match)
+                for code in sorted(codes_in_chunk & codes_to_output):
+                    ans_match = re.search(rf"{code}.*?Answer:\s*(.*)", text)
+                    if not ans_match:
+                        ans_match = re.search(r"Answer:\s*(.*)", text)
+                    if ans_match:
+                        detail = ans_match.group(1).strip()
+                        break
+                if code_matches:
+                    context_lines.append(f"Codes: {code_matches}")
+                if desc:
+                    context_lines.append(f"Description: {desc}")
+                if detail:
+                    context_lines.append(f"Detail: {detail}")
+                if file_name:
+                    context_lines.append(f"Source: {file_name}")
 
-        # --- NEW: Remove duplicate context lines for accuracy and sort for determinism ---
+        if not context_lines:
+            context_lines.append("No ICD-10 codes found in the retrieved data.")
+
+        # --- NEW: Remove duplicate context lines for accuracy ---
         seen = set()
         unique_context_lines = []
         for line in context_lines:
             if line not in seen:
                 unique_context_lines.append(line)
                 seen.add(line)
-        unique_context_lines = sorted(unique_context_lines)  # Sort for deterministic order
 
-        # --- IMPROVED SYSTEM PROMPT FOR CONSISTENCY ---
         gemini_system_prompt = (
             "You are an expert ICD-10-CM medical coding assistant. "
             "You are given ONLY the following retrieved context from official ICD-10-CM sources (Guideline, Index, Tabular List). "
-            "Strictly answer ONLY using the provided context. "
-            "If the context is insufficient, say: 'The retrieved ICD-10 context is insufficient to answer your question.' "
-            "Do NOT use any outside knowledge, do NOT guess, do NOT hallucinate, do NOT invent codes or facts. "
+            "Your job is to summarize and format the answer using ONLY the provided context. "
+            "Do NOT use any outside knowledge or make up codes. "
+            "If the context is insufficient, say so. "
             "If two codes are mutually exclusive per Excludes1, only output the code that lists the other in its Excludes1 (i.e., keep the code with the Excludes1 note, drop the excluded code). "
             "Always include a rationale and the disclaimer: "
             "\"This answer is for informational purposes only. Please confirm with the latest ICD-10-CM guidelines or a certified medical coder.\""
-            "If you are unsure or the answer is not in the context, say so clearly."
         )
         gemini_user_message = (
             f"User question: {user_question}\n\n"
@@ -1326,8 +1272,7 @@ Never say "No Excludes1 codes listed" unless the value after "Excludes1 Code(s):
             {"role": "system", "content": gemini_system_prompt},
             {"role": "user", "content": gemini_user_message}
         ]
-        # Lower temperature for more deterministic output
-        return generate_gemini_response(messages, temperature=0.05, max_tokens=1024)
+        return generate_gemini_response(messages, temperature=0.1, max_tokens=1024)
     except Exception as e:
         logger.error(f"Error generating RAG response: {e}")
         return "I'm sorry, I encountered an error while generating your answer. Please try again."
@@ -1471,7 +1416,7 @@ async def chat(request: ChatRequest):
                                 break
 
                     if structured_match:
-                        import re
+        
                         text = structured_match.get("text", "").strip()
                         extracted_column_value = structured_match.get("extracted_column_value")
                         query_text = request.question.lower()
@@ -1632,7 +1577,7 @@ async def chat(request: ChatRequest):
                     text = result.get("text", "").strip()
                     file_name = result.get("metadata", {}).get("file_name", "")
                     # Try to extract code(s) from the chunk
-                    import re
+               
                     code_matches = re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', text)
                     codes_in_chunk = ", ".join(sorted(set(code_matches)))
                     if codes_in_chunk:
