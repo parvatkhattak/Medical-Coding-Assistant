@@ -125,8 +125,8 @@ DOCUMENT_GROUPS = {
 
 RAG_CONFIG = {
     "MAX_RESULTS": 15,           # Maximum results to retrieve
-    "MIN_TEXT_LENGTH": 33,      # Minimum text length for quality filtering
-    "SIMILARITY_THRESHOLD": 0.7, # Minimum similarity score
+    "MIN_TEXT_LENGTH": 20,      # Minimum text length for quality filtering
+    "SIMILARITY_THRESHOLD": 0.549, # Minimum similarity score
     "MAX_SECTION_LENGTH": 1200, # Maximum length per source section
     "MAX_TEXT_LENGTH": 500      # Maximum length per individual result
 }
@@ -136,8 +136,10 @@ qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 # Initialize Gemini client
 genai.configure(api_key=GEMINI_API_KEY)
 
+from functools import lru_cache
+
+@lru_cache(maxsize=1000)
 def get_gemini_embedding(text: str) -> List[float]:
-    """Generate embedding using Gemini's text-embedding model"""
     try:
         result = genai.embed_content(
             model="models/text-embedding-004",
@@ -147,9 +149,8 @@ def get_gemini_embedding(text: str) -> List[float]:
         return result['embedding']
     except Exception as e:
         logger.error(f"Error generating Gemini embedding: {e}")
-        # Add retry logic instead of zero vector
         import time
-        time.sleep(1)  # Brief delay
+        time.sleep(1)
         try:
             result = genai.embed_content(
                 model="models/text-embedding-004",
@@ -160,7 +161,8 @@ def get_gemini_embedding(text: str) -> List[float]:
         except:
             raise Exception("Failed to generate embedding after retry")
 
-def generate_gemini_response(messages: List[Dict[str, str]], temperature: float = 0.5, max_tokens: int = 2048) -> str:
+
+def generate_gemini_response(messages: List[Dict[str, str]], temperature: float = 0.7, max_tokens: int = 512) -> str:
     """Generate response using Gemini Flash 2.0"""
     try:
         # Initialize the model
@@ -186,7 +188,9 @@ def generate_gemini_response(messages: List[Dict[str, str]], temperature: float 
         response = model.generate_content(
             full_prompt,
             generation_config=genai.types.GenerationConfig(
-                temperature=temperature,
+                temperature=0.0,      # ← deterministic
+                top_p=1.0,            # ← no randomness in sampling
+                top_k=1,              # ← choose only the top option
                 max_output_tokens=max_tokens,
             )
         )
@@ -820,6 +824,14 @@ def search_structured_data(query_intent: Dict[str, Any], rephrased_query: str, l
             metadata = result.payload.get("metadata", {})
             file_name = metadata.get("file_name", "")
             text_content = result.payload.get("text", "").strip()
+            import hashlib
+            text_hash = hashlib.md5(text_content.encode()).hexdigest()
+            if 'seen_texts' not in locals():
+                seen_texts = set()
+            if text_hash in seen_texts:
+                continue
+            seen_texts.add(text_hash)
+
             is_rag3 = file_name == "RAG3.csv"
             code_match = False
             matched_code = None
@@ -1197,18 +1209,32 @@ Never say "No Excludes1 codes listed" unless the value after "Excludes1 Code(s):
         all_codes = set(code_info.keys())
         codes_to_output = set(all_codes)
         # --- ENHANCED LOGIC: If code2 is listed in code1's Excludes1, keep only code1 ---
+        # --- ENHANCED LOGIC with Excludes1 awareness ---
         for code1 in all_codes:
             for code2 in all_codes:
                 if code1 == code2:
                     continue
-                if code2 in code_info.get(code1, {}).get("excludes1", set()):
-                    # code2 is excluded by code1, so keep code1, remove code2
-                    codes_to_output.discard(code2)
+                excludes1 = code_info.get(code1, {}).get("excludes1", set())
+                excludes2 = code_info.get(code1, {}).get("excludes2", set())
+
+                if code2 in excludes1:
+                    # Only drop code2 if Excludes2 is NOT also present
+                    if code2 not in excludes2:
+                        codes_to_output.discard(code2)
+
 
         # Compose a context string from all RAG results, but only for allowed codes
         context_lines = []
         for result in rag_results:
             text = result.get("text", "").strip()
+            import hashlib
+            text_hash = hashlib.md5(text.encode()).hexdigest()
+            if 'seen_texts' not in locals():
+                seen_texts = set()
+            if text_hash in seen_texts:
+                continue
+            seen_texts.add(text_hash)
+
             codes_in_chunk = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', text))
             # Only include info for codes that are not excluded
             if codes_in_chunk & codes_to_output:
