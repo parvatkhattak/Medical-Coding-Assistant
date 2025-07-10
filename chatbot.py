@@ -5,6 +5,7 @@ import json
 import re
 from fastapi import FastAPI, Path
 import nltk
+import ast
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 from dotenv import load_dotenv
@@ -25,6 +26,49 @@ def remove_stopwords(text):
     stop_words = set(stopwords.words('english'))
     words = [word.strip() for word in text.lower().split() if word.strip() != ""]
     return [word for word in words if word.isalnum() and word not in stop_words]
+
+
+def extract_diagnoses(text: str) -> List[str]:
+    """
+    Use Gemini to extract clinically relevant diagnoses including stages, types, severity,
+    anatomical sites, and other important modifiers necessary for precise ICD-10 coding.
+    Returns a clean list of diagnosis phrases.
+    """
+
+    try:
+        prompt = (
+            "From the following medical sentence, extract all clinically relevant diagnoses "
+            "and their important modifiers needed for ICD-10 coding. This includes:\n"
+            "- Primary diagnoses (e.g., hypertension, diabetes)\n"
+            "- Associated conditions or manifestations (e.g., nephropathy, retinopathy)\n"
+            "- Severity (e.g., mild, severe, uncontrolled)\n"
+            "- Type (e.g., type 1, type 2)\n"
+            "- Stage (e.g., stage 3 CKD)\n"
+            "- Anatomical site (e.g., left knee, bilateral lungs)\n"
+            "Return ONLY a valid Python list of strings (no explanation, no markdown, no bullet points).\n\n"
+            f"Sentence: \"{text}\""
+        )
+
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        response = model.generate_content(prompt)
+
+        raw = response.text.strip()
+
+        # Clean up markdown if Gemini adds code block
+        if raw.startswith("```") or "python" in raw:
+            raw = re.sub(r"```(python)?", "", raw).strip().rstrip("```")
+
+        diagnoses = ast.literal_eval(raw)
+
+        if isinstance(diagnoses, list):
+            cleaned = [d.strip().lower() for d in diagnoses if isinstance(d, str) and len(d.strip()) > 2]
+            return list(set(cleaned))
+
+    except Exception as e:
+        logger.error(f"Gemini diagnosis extraction failed: {e}")
+
+    return []
+
 
 
 def calculate_relevance_score(query_text: str, result_text: str, base_score: float) -> float:
@@ -472,79 +516,71 @@ def enhance_query_for_retrieval(query: str) -> str:
             'getting worse': 'progressive',
             'came back': 'recurrent'
         }
-        
+
+        # Detect and extract diagnoses from the query
+        extracted_diagnoses = extract_diagnoses(query)
+        logger.info(f"Extracted Diagnoses: {extracted_diagnoses}")
+
+        if extracted_diagnoses:
+            enhanced_parts = []
+            for diag in extracted_diagnoses:
+                for common_term, medical_term in medical_mappings.items():
+                    if common_term in diag:
+                        diag = diag.replace(common_term, medical_term)
+                enhanced_parts.append(diag)
+            # Add ICD context to improve RAG recall
+            enhanced_query = " | ".join(enhanced_parts) + " | icd-10 diagnosis codes"
+            return enhanced_query
+
+        # Default logic if no explicit diagnoses extracted
         enhanced_query = query.lower()
-        
+
         # Replace common terms with medical equivalents
         for common_term, medical_term in medical_mappings.items():
             if common_term in enhanced_query:
                 enhanced_query = enhanced_query.replace(common_term, medical_term)
-        
-        # --- EVEN STRONGER: Expand "htn" and "ckd" queries for better RAG retrieval ---
+
+        # Special logic for HTN + CKD combo query
         if (("htn" in enhanced_query or "hypertension" in enhanced_query) and
             ("ckd" in enhanced_query or "chronic kidney disease" in enhanced_query)):
-            # Try to extract CKD stage (allow "ckd3", "ckd 3", "stage 3", etc.)
             stage = None
             match = re.search(r'(ckd\s*[\-:]?\s*|stage\s*)?(\d)', enhanced_query)
             if match:
                 stage = match.group(2)
-            # Build expanded query with all possible relevant codes and synonyms
             expanded = [
-                "hypertension",
-                "chronic kidney disease",
-                "hypertensive chronic kidney disease",
-                "htn",
-                "ckd",
-                "combination code",
-                "I12", "I12.0", "I12.9", "I13", "I13.0", "I13.1", "I13.2", "I13.10", "I13.11", "I13.2",
+                "hypertension", "chronic kidney disease", "hypertensive chronic kidney disease",
+                "htn", "ckd", "combination code",
+                "I12", "I12.0", "I12.9", "I13", "I13.0", "I13.1", "I13.2", "I13.10", "I13.11",
                 "N18", "N18.3", "N18.30", "N18.31", "N18.32", "N18.39",
-                "renal disease",
-                "kidney disease",
-                "kidney failure",
-                "renal failure",
-                "renal insufficiency",
-                "CKD stage 3",
-                "stage 3 CKD",
-                "stage III CKD",
-                "stage 3 chronic kidney disease",
-                "stage III chronic kidney disease",
-                "chronic renal failure",
-                "chronic renal insufficiency",
-                "hypertensive renal disease",
-                "hypertensive renal failure",
-                "hypertensive kidney disease",
-                "hypertensive nephropathy",
-                "hypertensive nephrosclerosis",
-                "ICD-10",
-                "ICD 10",
-                "ICD10",
-                "ICD10CM",
-                "ICD-10-CM",
-                "code",
-                "diagnosis",
-                "classification"
+                "renal disease", "kidney disease", "kidney failure", "renal failure",
+                "renal insufficiency", "CKD stage 3", "stage 3 CKD", "stage III CKD",
+                "stage 3 chronic kidney disease", "stage III chronic kidney disease",
+                "chronic renal failure", "chronic renal insufficiency", "hypertensive renal disease",
+                "hypertensive renal failure", "hypertensive kidney disease", "hypertensive nephropathy",
+                "hypertensive nephrosclerosis", "ICD-10", "ICD 10", "ICD10", "ICD10CM",
+                "ICD-10-CM", "code", "diagnosis", "classification"
             ]
             if stage:
                 expanded += [
-                    f"stage {stage} ckd",
-                    f"ckd stage {stage}",
-                    f"n18.{stage}",
-                    f"n18.{stage}0", f"n18.{stage}1", f"n18.{stage}2", f"n18.{stage}9"
+                    f"stage {stage} ckd", f"ckd stage {stage}",
+                    f"n18.{stage}", f"n18.{stage}0", f"n18.{stage}1", f"n18.{stage}2", f"n18.{stage}9"
                 ]
-            # Join all terms for a dense query
             enhanced_query = " ".join(expanded)
         else:
-            # Add ICD-10 context keywords for better retrieval
+            # Add ICD context keywords for better retrieval
             icd_context_terms = ['icd-10', 'code', 'diagnosis', 'classification']
             if not any(term in enhanced_query for term in icd_context_terms):
                 if any(phrase in enhanced_query for phrase in ['what are the', 'correct codes', 'icd codes', 'code for']):
                     enhanced_query += ' icd-10 diagnosis code'
                 elif 'diagnosis' not in enhanced_query:
                     enhanced_query += ' diagnosis'
+
         return enhanced_query
+
     except Exception as e:
         logger.error(f"Error enhancing query: {e}")
         return query
+
     
 def structure_user_input_with_context(question: str, conversation_context: Dict[str, Any] = None, conversation_history: List[Dict[str, str]] = None) -> str:
     """Rephrase user query using the preprocessing prompt"""
@@ -1073,94 +1109,114 @@ def generate_rag_response_with_context(user_question: str, rephrased_query: str,
 
 5. If no combination code applies, proceed with assigning separate codes, following sequencing, specificity, and instructional note rules.
 
-**Guidelines to Follow**
+*Guidelines to Follow*
 
-1. **Strict Adherence to ICD-10-CM Guidelines (2025)**
+1. *Strict Adherence to ICD-10-CM Guidelines (2025)*
    - Use the most recent ICD-10-CM guidelines and supporting data from the Guideline, Alphabetic Index, and Tabular List.
    - If RAG data is incomplete or unavailable, rely solely on embedded ICD-10-CM knowledge.
 
-2. **Avoid Hallucination and Assumptions**
+2. *Avoid Hallucination and Assumptions*
    - Do not include unsupported information.
    - Do not infer diagnoses or relationships unless explicitly stated or medically inferable per ICD-10-CM rules.
 
-3. **Conversation Continuity**
+3. *Conversation Continuity*
    - Reference prior turns for context in multi-turn queries.
    - Do not lose track of partially answered or follow-up questions.
 
-4. **Instructional Notes to Follow**
+4. *Instructional Notes to Follow*
    While interpreting the Tabular List:
    - Include Notes – Conditions covered by a code
    - Exclude1 – Mutually exclusive; do not code both
    - Exclude2 – May code both if present
    - Code First – Sequence etiology first
-   - Use Additional Code – Report an additional code for cause/severity
+   - Use Additional Code – Always assign the additional required code unless it contradicts Excludes1.
    - Code Also – Report both when appropriate
    - Respect Laterality, Gender, and Age specificity
+   - Do not omit secondary codes required by "Use additional code" or "Code also" unless excluded by Excludes1.
 
-5. **Combination Code Enforcement**
+5. *Combination Code Enforcement*
    - Prioritize resolving combination codes when multiple diagnoses are listed.
    - Do not assign separate codes if a combination code applies, unless Exclude2 note allows it.
    - Use Alphabetic Index and Tabular List crosswalk to confirm.
 
-6. **Specificity, Severity, and Hierarchy**
+6. *Specificity, Severity, and Hierarchy*
    - Always assign the most specific code (e.g., laterality, severity).
-   - Use unspecified codes only when required information is truly absent.
+   - If the provided information is insufficient, assign the appropriate unspecified code (e.g., I10 for unspecified hypertension).
 
-7. **Query Types Handling**
+7. *Query Types Handling*
    - Code Lookup: Provide precise code and brief description.
    - Guideline/Rule Lookup: Return clear instruction from ICD-10-CM Guideline and Tabular List.
    - General Medical Concept: Explain the term per ICD-10-CM definition, not clinical advice.
 
-8. **Clarification for Missing Data**
+8. *Clarification for Missing Data*
    - If the query lacks specificity (e.g., type, site, laterality), use the unspecified code only if allowed and include a single clarifying question under "Clarification (if needed)".
 
-9. **Complex & Multi-Diagnosis Handling**
+9. *Complex & Multi-Diagnosis Handling*
    - Always evaluate the full list of diagnoses before coding.
    - Check for combination code eligibility before assigning separate codes.
    - Use correct sequencing: principal diagnosis first, then secondary and supplemental (e.g., Z3A. for gestational age if applicable).
 
-10. **Final Validation (Pre-Output Check)**
+10. *Final Validation (Pre-Output Check)*
     Before finalizing output:
     - Ensure combination code logic was fully applied.
-    - Validate sequencing, specificity, and inclusion/exclusion notes.
+    - Validate Sequencing, laterality, age/gender, and instructional notes
+    - Unspecified codes are used only if specificity is lacking and an unspecified code is valid.
+    - Mandatory additional codes from "Use additional code" or "Code also" notes are included.
     - Double-check that redundant codes are not included when a combination code exists.
 
-**Structured Data Handling**
-11. **CSV/Excel Data Interpretation**
+*Structured Data Handling*
+11. *CSV/Excel Data Interpretation*
     - When processing structured data (CSV/Excel files), interpret the content as tabular data with specific columns
     - For RAG3.csv (Tabular List): Use columns like 'ICD Code', 'Code Description', 'Keyword for this Code', 'Synonym', 'Excludes1/2', 'Includes', etc.
     - For Excel files with Q&A format: Interpret as question-answer pairs for guidelines and index lookups
     - Present structured data in a clear, organized format
 
-12. **Code Lookup Enhancement**
+12. *Code Lookup Enhancement*
     - When a specific ICD code is mentioned, prioritize exact matches from the tabular data
     - Cross-reference code descriptions, keywords, and synonyms for comprehensive answers
     - Include relevant excludes, includes, and coding instructions when available from structured data
 
-**Response Format**:
-**Response Format**:
-- **Answer**: Provide a concise response with ICD-10 code(s) highlighted (e.g., **E11.9**) or relevant information. For structured data queries, extract and present the exact field values.
-- **Rationale**: Explain the response, referencing the Guideline, Include/Exclude notes, Code also/Code first/Use Additional Code instructions, and any relevant laterality, gender, or age specificity from the Tabular List.
-- **Clarification (if needed)**: Include a single question if clarification is needed for specificity or missing context; otherwise omit this section.
-- **Disclaimer**: Always include: "This answer is for informational purposes only. Please confirm with the latest ICD-10-CM guidelines or a certified medical coder."
+13. Handling Low-Specificity Queries
+  - When the diagnosis is not fully specified (e.g., lacks laterality, type, or severity):
 
-**Adhere to ICD-10-CM Guidelines**: Follow official coding conventions, including sequencing rules and specificity requirements, as outlined in the Guideline dataset.
+- Do not ask multiple follow-up questions.
 
-**Avoid Non-ICD-10 Content**: Do not include unrelated information (e.g., general health advice or CPT) unless supported by the datasets.
+- Assign the most appropriate unspecified code (e.g., H66.90 - Otitis media, unspecified, unspecified ear), if one exists.
 
-**For Structured Data (CSV/Excel) Queries**:
+Mention in rationale: “Due to lack of detail, an unspecified code was used as per ICD-10-CM guideline instructions.”
+
+*Response Format*:
+- *Answer*: Begin with a clear, bulleted list of all ICD-10 code(s) and their corresponding descriptions.
+Example format:
+E11.9 – Type 2 diabetes mellitus without complications  
+I10 – Essential (primary) hypertension
+
+Then follow with any necessary narrative explanation or relevant information.  
+For structured data queries, extract and present exact field values from the dataset.
+
+- *Rationale*: Explain the response, referencing the Guideline, Include/Exclude notes, Code also/Code first/Use Additional Code instructions, and any relevant laterality, gender, or age specificity from the Tabular List.
+
+- *Clarification (if needed)*: Always provide the best possible answer based on the information given, even if it requires assigning an unspecified code as per ICD-10-CM. Then, include one follow-up question to seek additional specificity (e.g., type, site, laterality), if more precise coding is possible. The answer should not be delayed by waiting for clarification.
+
+- *Disclaimer*: Always include: "This answer is for informational purposes only. Please confirm with the latest ICD-10-CM guidelines or a certified medical coder."
+
+*Adhere to ICD-10-CM Guidelines*: Follow official coding conventions, including sequencing rules and specificity requirements, as outlined in the Guideline dataset.
+
+*Avoid Non-ICD-10 Content*: Do not include unrelated information (e.g., general health advice or CPT) unless supported by the datasets.
+
+*For Structured Data (CSV/Excel) Queries*:
 - When processing CSV/Excel data queries, ALWAYS prioritize and use the retrieved structured data from the RAG context
 - Do not rely on embedded knowledge when structured data is available
 - Present the structured data information clearly, referencing the specific data fields retrieved
 - If structured data context is provided, base your answer primarily on that data
 
-**CSV Data Format Interpretation**:
+*CSV Data Format Interpretation*:
 When you see the ICD-10 code data in the following format:
 
 "Row 668: Lookup Code: A92.5 | ICD Code: A92.5 | Code Description: Zika virus disease | Excludes1 Code(s): P35.4, B33.1"
 
 Your job is to extract the relevant field based on the user's question. For example:
-- If the user asks "Excludes1 codes for A92.5", return: **P35.4, B33.1**
+- If the user asks "Excludes1 codes for A92.5", return: *P35.4, B33.1*
 
 Never say "No Excludes1 codes listed" unless the value after "Excludes1 Code(s):" is explicitly missing."""
 
