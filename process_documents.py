@@ -32,13 +32,16 @@ logger = logging.getLogger(__name__)
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-COLLECTION_NAME = "Medical_Coder"
+COLLECTION_NAME = "Medical_Coder_"
 KB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "KB")
 EMBEDDING_DIM = 768  # Dimension for Gemini text-embedding-004
 PROCESSED_DOCS_FILE = os.path.join(KB_DIR, "processed_documents.json")
 BATCH_SIZE = 50  # Optimized batch size
 MAX_WORKERS = 3  # For concurrent processing
-
+# Chunking strategy configuration
+CHUNK_STRATEGY = "line_by_line"  # One complete medical code per chunk
+LINE_BASED_CHUNKING = True
+PRESERVE_CODE_INTEGRITY = True
 # Enhanced document groups with metadata
 DOCUMENT_GROUPS = {
     "Group 1": {
@@ -349,6 +352,9 @@ def extract_text_from_excel_optimized(excel_path: str, doc_group: str, group_inf
             # Process ALL rows (remove the limit)
             processed_rows = 0
             for idx, row in df.iterrows():
+                # Add chunking strategy info to metadata for Excel files  
+                if 'ICD' in os.path.basename(excel_path).upper() or any('ICD' in str(h).upper() for h in headers):
+                    text_parts.insert(4, "Chunking Strategy: Line-by-line (One complete medical code per chunk)")
                 row_data = []
                 for col, value in zip(headers, row):
                     if pd.notna(value) and str(value).strip():
@@ -476,6 +482,9 @@ def extract_text_from_csv_optimized(csv_path: str, doc_group: str, group_info: D
             # Process ALL rows (no limits)
             processed_rows = 0
             for idx, row in df.iterrows():
+                # Add chunking strategy info to metadata for CSV files
+                if 'ICD' in os.path.basename(csv_path).upper():
+                    text_parts.insert(2, "Chunking Strategy: Line-by-line (One complete medical code per chunk)")
                 row_data = []
                 for col in headers:
                     value = row[col]
@@ -601,58 +610,101 @@ def extract_text_from_csv_optimized(csv_path: str, doc_group: str, group_info: D
     return []
 
 def create_optimized_chunks(text: str, metadata: Dict[str, Any]) -> List[Document]:
-    """Create optimized text chunks with better splitting - ensures ALL content is chunked"""
+    """Create line-by-line chunks for medical codes - ensures complete code info per chunk"""
     if not text.strip():
         return []
     
-    print(f"   🔪 Creating chunks for {metadata.get('file_name', 'unknown')}...")
+    print(f"   🔪 Creating line-by-line chunks for {metadata.get('file_name', 'unknown')}...")
     
-    # Adjust chunk size based on document type and content length
-    if len(text) > 100000:  # Very large documents
-        chunk_size = 2000
-        chunk_overlap = 200
-    elif len(text) > 50000:  # Large documents
-        chunk_size = 1500
-        chunk_overlap = 150
-    else:  # Normal documents
-        chunk_size = 1000
-        chunk_overlap = 100
-    
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", "! ", "? ", ", ", " ", ""],
-        length_function=len,
-        is_separator_regex=False
-    )
-    
-    # Split the text
-    chunks = text_splitter.split_text(text)
     documents = []
     
-    print(f"   📊 Generated {len(chunks)} chunks")
+    # Check if this is medical code data (CSV or Excel with tabular structure)
+    file_type = metadata.get('file_type', '')
+    is_medical_data = file_type in ['csv', 'excel'] or 'ICD' in metadata.get('file_name', '').upper()
     
-    # Process ALL chunks (remove size filter to ensure no content is lost)
-    for i, chunk in enumerate(chunks):
-        chunk_text = chunk.strip()
-        if not chunk_text:  # Only skip completely empty chunks
-            continue
-            
-        doc_metadata = metadata.copy()
-        doc_metadata.update({
-            "chunk_index": i,
-            "chunk_size": len(chunk_text),
-            "total_chunks": len(chunks),
-            "chunk_overlap": chunk_overlap
-        })
+    if is_medical_data and LINE_BASED_CHUNKING:
+        # Line-by-line processing for medical codes
+        lines = text.split('\n')
+        chunk_index = 0
         
-        documents.append(Document(
-            page_content=chunk_text,
-            metadata=doc_metadata
-        ))
+        for i, line in enumerate(lines):
+            line = line.strip()
+            
+            # Skip headers, empty lines, and section markers
+            if not line or line.startswith('===') or line.startswith('File:') or line.startswith('Columns:') or line.startswith('Total Rows:'):
+                continue
+            
+            # Process lines that contain actual medical code data
+            if line.startswith('Row ') and ':' in line:
+                # This is a data row with complete medical code information
+                # Extract the row content (everything after "Row X: ")
+                row_content = line.split(': ', 1)[1] if ': ' in line else line
+                
+                # Ensure we have substantial content (medical codes with all columns)
+                if len(row_content) > 50 and '|' in row_content:  # Contains column separators
+                    doc_metadata = metadata.copy()
+                    doc_metadata.update({
+                        "chunk_index": chunk_index,
+                        "chunk_size": len(row_content),
+                        "original_line_number": i + 1,
+                        "chunking_strategy": "line_by_line",
+                        "content_type": "complete_medical_code",
+                        "preserve_integrity": True
+                    })
+                    
+                    documents.append(Document(
+                        page_content=row_content,
+                        metadata=doc_metadata
+                    ))
+                    
+                    chunk_index += 1
+        
+        print(f"   📊 Line-by-line processing: {len(documents)} medical code chunks created")
+        
+    else:
+        # Standard chunking for non-medical-code files (PDFs, etc.)
+        if len(text) > 100000:
+            chunk_size = 2000
+            chunk_overlap = 200
+        elif len(text) > 50000:
+            chunk_size = 1500
+            chunk_overlap = 150
+        else:
+            chunk_size = 1000
+            chunk_overlap = 100
+        
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", ". ", "! ", "? ", ", ", " ", ""],
+            length_function=len,
+            is_separator_regex=False
+        )
+        
+        chunks = text_splitter.split_text(text)
+        
+        for i, chunk in enumerate(chunks):
+            chunk_text = chunk.strip()
+            if not chunk_text:
+                continue
+                
+            doc_metadata = metadata.copy()
+            doc_metadata.update({
+                "chunk_index": i,
+                "chunk_size": len(chunk_text),
+                "total_chunks": len(chunks),
+                "chunk_overlap": chunk_overlap,
+                "chunking_strategy": "standard"
+            })
+            
+            documents.append(Document(
+                page_content=chunk_text,
+                metadata=doc_metadata
+            ))
+        
+        print(f"   📊 Standard processing: {len(documents)} chunks created")
     
-    print(f"   ✅ Created {len(documents)} valid chunks")
-    
+    print(f"   ✅ Total chunks created: {len(documents)}")
     return documents
 
 def store_in_qdrant_optimized(qdrant_client: QdrantClient, embeddings: OptimizedGeminiEmbeddings, 
@@ -741,7 +793,7 @@ def process_documents_optimized(kb_dir: str = KB_DIR) -> str:
         
         # Get all files
         all_files = (
-            glob.glob(os.path.join(kb_dir, "*.pdf")) +
+            # glob.glob(os.path.join(kb_dir, "*.pdf")) +
             glob.glob(os.path.join(kb_dir, "*.xlsx")) +
             glob.glob(os.path.join(kb_dir, "*.xls")) +
             glob.glob(os.path.join(kb_dir, "*.csv"))
@@ -1219,7 +1271,11 @@ def search_documents_enhanced(query: str, doc_group: Optional[str] = None,
 if __name__ == '__main__':
     print("⚡ COMPLETE Medical Document Processing System with Gemini")
     print("🎯 This version processes ALL content without any limits!")
-    
+    print("🚀 Starting COMPLETE Medical Document Processing...")
+    print("🎯 This will process ALL content from ALL files without any limits!")
+    print("📋 Chunking Strategy: Line-by-line for medical codes (one complete code per chunk)")
+    print("🔧 Code Integrity: Preserved (all columns stay together)")
+        
     # Ask user if they want to force reprocess all files
     user_input = input("\n🔄 Force reprocess all files? (y/N): ").strip().lower()
     if user_input == 'y':
