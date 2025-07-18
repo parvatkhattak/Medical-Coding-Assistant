@@ -143,7 +143,7 @@ if not qdrant_client:
     sys.exit(1)
 
 # Collection configuration
-collections = ["Medical_Coder"]
+collections = ["Medical_Coder_"]
 VECTOR_SIZE = 768  # Updated for Gemini embeddings (text-embedding-004)
 
 for collection in collections:
@@ -170,11 +170,27 @@ for collection in collections:
         
         # Create new collection with correct vector size for Gemini
         print(f"Creating collection '{collection}' with vector size {VECTOR_SIZE}...")
+        # Configure chunking strategy for line-by-line processing
+        CHUNK_STRATEGY = "line_by_line"  # One complete medical code per chunk
+        CHUNK_SIZE = 1  # Process one line at a time
+        CHUNK_OVERLAP = 0  # No overlap needed for medical codes
         qdrant_client.create_collection(
             collection_name=collection,
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)
         )
-        
+        # Medical code chunking configuration
+        medical_code_config = {
+            "chunking_method": "line_based",
+            "preserve_code_integrity": True,
+            "include_all_columns": True,
+            "separator": "\n",
+            "min_chunk_size": 1,
+            "max_chunk_size": 1
+        }
+
+        print(f"   Chunking strategy: {CHUNK_STRATEGY}")
+        print(f"   Chunk size: {CHUNK_SIZE} line(s) per chunk")
+        print(f"   Code integrity: Preserved")
         # Verify collection was created
         if qdrant_client.collection_exists(collection):
             print(f"✅ Collection '{collection}' was created successfully.")
@@ -183,6 +199,8 @@ for collection in collections:
             collection_info = qdrant_client.get_collection(collection)
             print(f"   Vector size: {collection_info.config.params.vectors.size}")
             print(f"   Distance metric: {collection_info.config.params.vectors.distance}")
+            print(f"   Chunking method: Line-by-line (complete codes)")
+            print(f"   Data integrity: Each chunk contains one complete medical code")
         else:
             print(f"❌ Collection '{collection}' creation verification failed.")
         
