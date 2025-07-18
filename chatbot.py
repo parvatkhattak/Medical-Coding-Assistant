@@ -12,6 +12,18 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from fastapi.middleware.cors import CORSMiddleware
 
+
+import sys
+
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s"
+)
+logger = logging.getLogger("chatbot")
+
+
+
 # Define custom download directory
 custom_dir = "nltk_data"
 
@@ -100,6 +112,27 @@ def calculate_relevance_score(query_text: str, result_text: str, base_score: flo
         logger.error(f"Error calculating relevance score: {e}")
         return base_score
 
+def rerank_chunks(query: str, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Rerank retrieved chunks based on combined relevance score and optional re-embedding rerank.
+    Preserves the original structure but ensures best-matching chunks rise to the top.
+    """
+    try:
+        normalized_query = normalize_query(query)
+
+        for chunk in chunks:
+            chunk_text = chunk.get("text", "")
+            base_score = chunk.get("score", 0.0)
+            chunk["relevance_score"] = calculate_relevance_score(normalized_query, chunk_text, base_score)
+
+        # Sort in-place based on new relevance score
+        chunks.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+        return chunks
+
+    except Exception as e:
+        logger.error(f"Error during reranking: {e}")
+        return chunks  # fallback to original order
+
 
 def filter_by_content_quality(results: List[Dict[str, Any]], min_length: int = None) -> List[Dict[str, Any]]:
     """Filter results based on content quality and length"""
@@ -168,7 +201,7 @@ DOCUMENT_GROUPS = {
 
 
 RAG_CONFIG = {
-    "MAX_RESULTS": 15,           # Maximum results to retrieve
+    "MAX_RESULTS":15,           # Maximum results to retrieve
     "MIN_TEXT_LENGTH": 20,      # Minimum text length for quality filtering
     "SIMILARITY_THRESHOLD": 0.549, # Minimum similarity score
     "MAX_SECTION_LENGTH": 1200, # Maximum length per source section
@@ -846,6 +879,21 @@ def search_structured_data(query_intent: Dict[str, Any], rephrased_query: str, l
         target_codes = set()
         if query_intent.get("search_terms"):
             target_codes.update(code.upper() for code in query_intent["search_terms"])
+        # 🔁 Force-fetch structured entries for all extracted codes
+        # Even if they don’t show up in initial search, include them explicitly
+        forced_entries = []
+        seen_forced = set()
+
+        for code in target_codes:
+            for result in search_result:
+                if result.payload.get("text", "").upper().find(code) != -1:
+                    if result.payload.get("text") not in seen_forced:
+                        forced_entries.append(result)
+                        seen_forced.add(result.payload.get("text"))
+
+        # Append forced entries to result list to ensure Excludes1 data is included
+        search_result.extend(forced_entries)
+
 
         original_codes = re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', query_intent.get("original_query", "").upper())
         target_codes.update(original_codes)
@@ -885,15 +933,25 @@ def search_structured_data(query_intent: Dict[str, Any], rephrased_query: str, l
                             col_names = ["Excludes1 Code(s)"]
                         # Try to extract the requested column(s)
                         for col in col_names:
-                            match = re.search(rf"{re.escape(col)}:\s*([^|]*)", text_content, re.IGNORECASE)
+                            # Making the colon and following space optional, and capturing content
+                            # up to a pipe character or the end of the line/string.
+                            match = re.search(rf"{re.escape(col)}\s*[:]?\s*([^|\n]*)", text_content, re.IGNORECASE)
                             if match:
-                                extracted_column_value = match.group(1).strip()
-                                break
-                        # If no specific column found, try to extract Excludes1 by default
+                                value = match.group(1).strip()
+                                if value: # Only assign if a non-empty value is found
+                                    extracted_column_value = value
+                                    break
+                        # If no specific column found, try to extract Excludes1 by default with more flexibility
                         if not extracted_column_value:
-                            match = re.search(r"Excludes1 Code\(s\):\s*([^|]*)", text_content, re.IGNORECASE)
-                            if match:
-                                extracted_column_value = match.group(1).strip()
+                            possible_excludes_headers = ["Excludes1 Code(s)", "Excludes1 Codes", "Excludes1"]
+                            for header in possible_excludes_headers:
+                                # Capture content after the header, making colon and space optional
+                                match = re.search(rf"{re.escape(header)}\s*[:]?\s*([^|\n]*)", text_content, re.IGNORECASE)
+                                if match:
+                                    value = match.group(1).strip()
+                                    if value:
+                                        extracted_column_value = value
+                                        break
                         code_match = True
                         matched_code = code
                         # Score: prefer chunks with both Lookup Code and ICD Code match
@@ -1093,6 +1151,47 @@ def organize_rag_results_by_source(rag_results: List[Dict[str, Any]]) -> Dict[st
     
     return organized
 
+def resolve_excludes1_conflicts(rag_results: List[Dict[str, Any]]) -> set[str]:
+    logger.info("🧪 Running resolve_excludes1_conflicts()...")
+
+    """
+    Improved: Normalize excludes codes, add tracing logs, and prevent unnecessary exclusions.
+    """
+    code_info = {}
+    all_found_codes = set()
+
+    for result in rag_results:
+        text = result.get("text", "")
+        
+        keeper_match = re.search(r"(?:Lookup Code|ICD Code)\s*[:\-]?\s*([A-Z]\d{2}(?:\.\d{1,3})?)", text, re.IGNORECASE)
+        if not keeper_match:
+            continue
+
+        keeper_code = keeper_match.group(1).strip().upper()
+        all_found_codes.add(keeper_code)
+        code_info.setdefault(keeper_code, {"excludes1": set()})
+
+        excludes_matches = re.findall(r"Excludes1\s*(?:Code\(s\))?\s*[:\-]?\s*([A-Z0-9\.,\s]+)", text, re.IGNORECASE)
+        for ex in excludes_matches:
+            excluded_codes = [c.strip().upper() for c in ex.split(",") if c.strip()]
+            code_info[keeper_code]["excludes1"].update(excluded_codes)
+
+    excluded_codes = set()
+    for keeper, info in code_info.items():
+        for excluded in info["excludes1"]:
+            if excluded in all_found_codes:
+                logger.info(f"Excluding {excluded} because it's listed under {keeper}'s Excludes1")
+                excluded_codes.add(excluded)
+
+    final_codes = all_found_codes - excluded_codes
+    logger.info(f"✅ Keeper codes: {all_found_codes}")
+    logger.info(f"❌ Excluded by Excludes1: {excluded_codes}")
+    logger.info(f"🎯 Final non-conflicting codes: {final_codes}")
+    return final_codes
+
+
+
+
 def generate_rag_response_with_context(user_question: str, rephrased_query: str, rag_results: List[Dict[str, Any]], conversation_history: List[Dict[str, str]] = None, conversation_context: Dict[str, Any] = None) -> str:
     """Generate response using the new RAG processing prompt, with Excludes1/2 logic enforced."""
     try:
@@ -1223,8 +1322,22 @@ Never say "No Excludes1 codes listed" unless the value after "Excludes1 Code(s):
         # Format conversation history
         conversation_history_text = format_conversation_history_for_prompt(conversation_history)
         
-        # Organize RAG results by source
-        organized_context = organize_rag_results_by_source(rag_results)
+        codes_to_output = resolve_excludes1_conflicts(rag_results)
+        logger.info(f"✅ Final codes to output after Excludes1 resolution: {codes_to_output}")
+
+        # Filter rag_results to exclude chunks with only excluded codes
+        filtered_rag_results = []
+        for result in rag_results:
+            text = result.get("text", "").strip()
+            codes_in_chunk = set(re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', text))
+            if codes_in_chunk & codes_to_output:
+                filtered_rag_results.append(result)
+
+        logger.info(f"📦 Filtered RAG results: {len(filtered_rag_results)} from original {len(rag_results)}")
+
+        # Now organize filtered RAG results only
+        organized_context = organize_rag_results_by_source(filtered_rag_results)
+
 
 
         # Update the user_message in generate_rag_response_with_context:
@@ -1247,36 +1360,8 @@ Never say "No Excludes1 codes listed" unless the value after "Excludes1 Code(s):
             {"role": "user", "content": user_message}
         ]
 
-        # --- ENHANCED: Enforce Excludes1/2 logic, always keep the code that lists the other in its Excludes1 ---
-    
-        code_info = {}
-        for result in rag_results:
-            text = result.get("text", "")
-            codes = re.findall(r'\b[A-Z]\d{2}(?:\.\d{1,2})?\b', text)
-            excludes1 = re.findall(r'Excludes1 Code\(s\):\s*([A-Z0-9\.,\s]*)', text)
-            excludes2 = re.findall(r'Excludes2 Code\(s\):\s*([A-Z0-9\.,\s]*)', text)
-            for code in codes:
-                code_info.setdefault(code, {"excludes1": set(), "excludes2": set()})
-                for ex in excludes1:
-                    code_info[code]["excludes1"].update([c.strip() for c in ex.split(",") if c.strip()])
-                for ex in excludes2:
-                    code_info[code]["excludes2"].update([c.strip() for c in ex.split(",") if c.strip()])
-
-        all_codes = set(code_info.keys())
-        codes_to_output = set(all_codes)
-        # --- ENHANCED LOGIC: If code2 is listed in code1's Excludes1, keep only code1 ---
-        # --- ENHANCED LOGIC with Excludes1 awareness ---
-        for code1 in all_codes:
-            for code2 in all_codes:
-                if code1 == code2:
-                    continue
-                excludes1 = code_info.get(code1, {}).get("excludes1", set())
-                excludes2 = code_info.get(code1, {}).get("excludes2", set())
-
-                if code2 in excludes1:
-                    # Only drop code2 if Excludes2 is NOT also present
-                    if code2 not in excludes2:
-                        codes_to_output.discard(code2)
+        codes_to_output = resolve_excludes1_conflicts(rag_results)
+        logger.info(f"✅ Final codes to output after Excludes1 resolution: {codes_to_output}")
 
 
         # Compose a context string from all RAG results, but only for allowed codes
@@ -1323,9 +1408,12 @@ Never say "No Excludes1 codes listed" unless the value after "Excludes1 Code(s):
                     context_lines.append(f"Detail: {detail}")
                 if file_name:
                     context_lines.append(f"Source: {file_name}")
+            if not (codes_in_chunk & codes_to_output):
+                continue
 
         if not context_lines:
             context_lines.append("No ICD-10 codes found in the retrieved data.")
+        
 
         # --- NEW: Remove duplicate context lines for accuracy ---
         seen = set()
@@ -1440,6 +1528,7 @@ async def save_conversation_message(chat_id: str, user_id: str, user_message: st
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
+    logger.info("🚀 /api/chat called")
     """Enhanced chat API endpoint with new prompts"""
     try:
         # Get conversation history
@@ -1498,6 +1587,7 @@ async def chat(request: ChatRequest):
                                 break
 
                     if structured_match:
+                        logger.info("✅ Structured match found, applying exclude logic")
         
                         text = structured_match.get("text", "").strip()
                         extracted_column_value = structured_match.get("extracted_column_value")
@@ -1579,6 +1669,12 @@ async def chat(request: ChatRequest):
                             "**Disclaimer**: This answer is for informational purposes only. Please confirm with the latest ICD-10-CM guidelines or a certified medical coder."
                         ])
                         await save_conversation_message(request.chat_id, request.user_id, request.question, formatted_answer)
+
+                        # 👇 NEW: run excludes1 logic before output
+                        codes_to_output = resolve_excludes1_conflicts(rag_results)
+
+                        logger.info(f"✅ Final codes to output after Excludes1 resolution: {codes_to_output}")
+
                         return ChatResponse(
                             answer=formatted_answer,
                             sources=[structured_match],
@@ -1638,17 +1734,29 @@ async def chat(request: ChatRequest):
                         }
                     )
 
-                # Fallback to general search if structured failed
-                if len(rag_results) == 0:
-                    logger.info("No structured results found, trying general search")
-                    enhanced_query = enhance_query_for_retrieval(rephrased_query)
-                    rag_results = search_single_collection_with_filtering(enhanced_query, limit=3)
+            # Fallback to general search if structured failed
+            if len(rag_results) == 0:
+                logger.info("No structured results found, trying general search")
+                enhanced_query = enhance_query_for_retrieval(rephrased_query)
+                rag_results = search_single_collection_with_filtering(enhanced_query)
+                rag_results = rerank_chunks(rephrased_query, rag_results)
             else:
                 # Use general search for non-structured medical queries
                 enhanced_query = enhance_query_for_retrieval(rephrased_query)
                 rag_results = search_single_collection_with_filtering(enhanced_query)
+                rag_results = rerank_chunks(rephrased_query, rag_results)
 
             logger.info(f"Retrieved {len(rag_results)} results from RAG sources")
+            # ✅ Sort and print top RAG sources in debug mode by relevance
+            rag_results.sort(key=lambda x: x.get("relevance_score", x.get("score", 0)), reverse=True)
+            logger.debug("Top Retrieved Sources (sorted by relevance):")
+            for i, res in enumerate(rag_results):
+                logger.debug(
+                    f"[{i+1}] Score: {res.get('score', 0):.4f}, "
+                    f"Relevance: {res.get('relevance_score', 0):.4f}, "
+                    f"File: {res.get('metadata', {}).get('file_name', 'Unknown')}"
+                )
+
 
             # ✅ Final fallback: Only generate answer if RAG results exist
             if rag_results:
@@ -1708,18 +1816,19 @@ async def chat(request: ChatRequest):
         await save_conversation_message(request.chat_id, request.user_id, request.question, answer)
         
         # Prepare sources information (now deduplicated)
-        sources = []
-        for result in rag_results:
-            metadata = result["metadata"]
-            sources.append({
-                "file_name": metadata.get("file_name", "Unknown"),
+        sources = sorted([
+            {
+                "file_name": result["metadata"].get("file_name", "Unknown"),
                 "source_group": result["source_group"],
                 "source_description": result["source_description"],
                 "source_priority": result["source_priority"],
                 "score": result["score"],
                 "text": result["text"],
-                "metadata": metadata
-            })
+                "metadata": result["metadata"]
+            }
+            for result in rag_results
+        ], key=lambda x: x.get("score", 0), reverse=True)
+
         
         return ChatResponse(
             answer=answer, 
@@ -1827,18 +1936,19 @@ async def get_code_info(
         )
 
         # Prepare sources for output
-        sources = []
-        for result in all_results:
-            metadata = result.get("metadata", {})
-            sources.append({
-                "file_name": metadata.get("file_name", "Unknown"),
+        sources = sorted([
+            {
+                "file_name": result.get("metadata", {}).get("file_name", "Unknown"),
                 "source_group": result.get("source_group"),
                 "source_description": result.get("source_description"),
                 "source_priority": result.get("source_priority"),
                 "score": result.get("score"),
                 "text": result.get("text"),
-                "metadata": metadata
-            })
+                "metadata": result.get("metadata", {})
+            }
+            for result in all_results
+        ], key=lambda x: x.get("score", 0), reverse=True)
+
 
         return {
             "code": code,
