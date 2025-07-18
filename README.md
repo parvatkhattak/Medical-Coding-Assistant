@@ -1,263 +1,283 @@
-# 🏥 Medical Coding Assistant
+# 🏥 Medical Coding Assistant - Enhanced README
 
-An AI-powered medical coding chatbot that provides intelligent guidance on ICD-10 and CPT coding for medical professionals. Built with FastAPI backend and Streamlit frontend, utilizing RAG (Retrieval-Augmented Generation) architecture with Google's Gemini AI.
+An AI-powered medical coding assistant built with **FastAPI** (backend) and **Streamlit** (frontend), integrating **Google Gemini AI** and **Qdrant** for Retrieval-Augmented Generation (RAG). This system offers intelligent ICD-10 guidance, leveraging multi-source medical documents.
 
-## ✨ Features
+---
 
-- **🤖 Intelligent Medical Coding Assistance**: Get instant answers to ICD-10 and CPT coding questions
-- **📚 RAG-Powered Knowledge Base**: Retrieves relevant information from comprehensive medical coding datasets
-- **💬 Conversational Interface**: Maintains context across multiple questions in a chat session
-- **🔍 Advanced Query Processing**: Automatically rephrases and optimizes user queries for better results
-- **📊 Debug Mode**: Detailed insights into query processing and source retrieval
-- **📱 Responsive Design**: Modern, mobile-friendly interface with dark theme
-- **🔄 Real-time Processing**: Fast response times with conversation history tracking
+## 🌟 Key Features
 
-## 🏗️ Architecture
+* **ICD-10 Code Assistance**: Conversational support for complex and basic coding questions.
+* **RAG Architecture**: Intelligent retrieval of information from ICD-10 Guidelines, Index, and Tabular List.
+* **Gemini-Powered Intelligence**: Used for query rephrasing, diagnosis extraction, embeddings, and generation.
+* **Context-Aware Chat**: Follow-up question support with history and intent tracking.
+* **Real-time Chat UI**: Streamlit-based, mobile-friendly and styled with modern CSS.
+* **Debug Mode**: View internal decision logic (e.g., source selection, query enhancement).
 
-### Backend (FastAPI)
-- **RAG Pipeline**: Query preprocessing, vector search, and response generation
-- **Vector Database**: Qdrant for semantic search across medical coding documents
-- **AI Integration**: Google Gemini 2.0 Flash for embeddings and text generation
-- **Conversation Management**: Supabase for chat history storage
-- **Multi-source Knowledge**: ICD-10 Guidelines, Alphabetic Index, and Tabular List
+---
 
-### Frontend (Streamlit)
-- **Modern UI**: Clean, professional interface with dark theme
-- **Real-time Chat**: Interactive chat interface with message history
-- **Debug Tools**: Advanced debugging capabilities for development
-- **Responsive Design**: Mobile-optimized with touch-friendly controls
-- **Quick Actions**: Sample questions for easy getting started
+## 📈 System Architecture (with Detailed Steps)
 
-## 🚀 Quick Start
+```
+Step 1: Data Ingestion
+───────────────────────────────
+  ┌─────────────────────────────┐
+  │      Medical Documents      │  ← RAG1.pdf, RAG2.xlsx, RAG3.csv
+  │   (PDFs / Excel / CSVs)     │
+  └──────────────┬──────────────┘
+                 │
+                 ▼
+Step 2: Chunking + Embedding
+───────────────────────────────
+  ┌─────────────────────────────┐
+  │ process_documents.py        │
+  │ - Extract text              │
+  │ - Chunk by line             │
+  │ - Generate Gemini Embedding│
+  └──────────────┬──────────────┘
+                 │
+                 ▼
+Step 3: Store in Vector DB
+───────────────────────────────
+  ┌─────────────────────────────┐
+  │ Qdrant Vector Database      │
+  │ - Stores text + vectors     │
+  │ - Metadata (doc group etc.) │
+  └──────────────┬──────────────┘
+                 │
+                 ▼
+Step 4: Backend API (FastAPI)
+───────────────────────────────
+  ┌────────────────────────────────────────────────┐
+  │ chatbot.py                                     │
+  │ - Enhance Query (Gemini)                      │
+  │ - Extract Diagnoses                          │
+  │ - Semantic Search via Qdrant                 │
+  │ - Filter + Rerank Results                    │
+  │ - Generate Response (Gemini)                 │
+  │ - Store Chat History in Supabase             │
+  └──────────────┬────────────────────────────────┘
+                 │
+                 ▼
+Step 5: Frontend (Streamlit)
+───────────────────────────────
+  ┌─────────────────────────────┐
+  │ streamlit_app.py            │
+  │ - Chat UI                   │
+  │ - Debug Tools               │
+  │ - Quick Questions           │
+  │ - Session Management        │
+  └──────────────┬──────────────┘
+                 │
+                 ▼
+Step 6: User Interaction
+───────────────────────────────
+  ┌─────────────────────────────┐
+  │ User Inputs Query           │
+  │ ⇄ Chatbot Response (Live)   │
+  └─────────────────────────────┘
+```
+
+---
+
+## 🚀 Getting Started
 
 ### Prerequisites
 
-- Python 3.8+
-- Qdrant vector database
-- Google AI API key
-- Supabase account (for chat history)
+* Python 3.8+
+* Qdrant Vector DB (local/docker/cloud)
+* Supabase project (for chat memory)
+* Google Gemini API Key
 
 ### Installation
 
-1. **Clone the repository**
 ```bash
 git clone https://github.com/parvatkhattak/Medical_chatbot.git
 cd Medical_chatbot
-```
-
-2. **Install dependencies**
-```bash
 pip install -r requirements.txt
 ```
 
-3. **Set up environment variables**
-Create a `.env` file in the root directory:
-```env
-# Qdrant Configuration
-QDRANT_URL=your_qdrant_url
-QDRANT_API_KEY=your_qdrant_api_key
+### .env Setup
 
-# Google AI Configuration
+```env
+# Qdrant
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=
+
+# Gemini
 GEMINI_API_KEY=your_gemini_api_key
 
-# Supabase Configuration
-SUPABASE_URL=your_supabase_url
+# Supabase
+SUPABASE_URL=https://xyz.supabase.co
 SUPABASE_KEY=your_supabase_key
 SUPABASE_TABLE_NAME=chathistory
 ```
 
-4. **Start the backend server**
-```bash
-python chatbot.py
-```
+### Running Locally
 
-5. **Launch the frontend (in a new terminal)**
 ```bash
+# 1. Process documents into Qdrant
+python process_documents.py
+
+# 2. Start backend
+python chatbot.py
+
+# 3. Start frontend
 streamlit run streamlit_app.py
 ```
 
-6. **Access the application**
-Open your browser and navigate to `http://localhost:8501`
-
-
-## 🗄️ Data Setup
-
-The system expects three main document groups in your Qdrant collection:
-
-### Group 1: ICD-10 Guidelines
-- `RAG1.pdf` - Official ICD-10 coding guidelines
-- `RAG1_1.xlsx` - Supplementary guideline data
-
-### Group 2: ICD-10 Alphabetic Index
-- `RAG2.xlsx` - Main alphabetic index
-- `RAG2_1.pdf`, `RAG2_2.pdf`, `RAG2_3.pdf` - Supporting index documents
-
-### Group 3: ICD-10 Tabular List
-- `RAG3.csv` - Complete tabular list with codes and descriptions
-
-## 🔧 Configuration
-
-### Backend Configuration
-The system uses several configurable parameters:
-
-- **Collection Name**: `Medical_Coder` (default Qdrant collection)
-- **Embedding Model**: `text-embedding-004` (Google)
-- **Generation Model**: `gemini-2.0-flash-exp`
-- **Search Limit**: 9 results per query (configurable)
-- **Temperature**: 0.3 for medical queries, 0.7 for general chat
-
-### Frontend Configuration
-- **Server URL**: `http://localhost:8000` (FastAPI backend)
-- **Debug Mode**: Toggle for development insights
-- **Chat History**: Automatic session management
-
-## 🎯 Usage Examples
-
-### Basic Coding Questions
-```
-User: "What is the ICD-10 code for diabetes?"
-Assistant: The ICD-10 code for diabetes mellitus is **E11.9** (Type 2 diabetes mellitus without complications)...
-```
-
-### Complex Coding Scenarios
-```
-User: "How do I code pneumonia with sepsis?"
-Assistant: For pneumonia with sepsis, you'll need to consider combination coding rules...
-```
-
-### Follow-up Questions
-```
-User: "What about the same patient with kidney complications?"
-Assistant: Building on the previous case, for diabetes with kidney complications...
-```
-
-## 🔍 Debug Mode
-
-Enable debug mode to see:
-- **Query Preprocessing**: How user input is optimized
-- **Source Retrieval**: Which documents were searched
-- **Response Generation**: AI reasoning process
-- **Conversation Context**: How chat history influences responses
-
-## 🏥 Medical Coding Features
-
-### ICD-10 Specific Capabilities
-- **Code Lookup**: Find specific codes for conditions
-- **Guideline Interpretation**: Understand coding rules and conventions
-- **Sequencing Rules**: Proper order for multiple diagnoses
-- **Combination Codes**: When to use single vs. multiple codes
-- **Specificity Requirements**: Most detailed code available
-
-### Advanced Features
-- **Include/Exclude Notes**: Comprehensive code usage rules
-- **Laterality Coding**: Left, right, bilateral specifications
-- **Gender/Age Specificity**: Demographic-specific codes
-- **Code Also/Code First**: Proper sequencing instructions
-
-## 🛠️ Development
-
-### Project Structure
-```
-Medical_chatbot/
-├── chatbot.py              # FastAPI backend
-├── streamlit_app.py        # Streamlit frontend
-├── requirements.txt        # Python dependencies
-├── .env                    # Environment variables
-├── nltk_data/             # NLTK data directory
-└── README.md              # This file
-```
-
-### API Endpoints
-- `POST /api/chat` - Main chat endpoint
-- `POST /api/new-chat` - Create new chat session
-- `GET /api/chat-history/{chat_id}` - Retrieve chat history
-- `GET /api/health` - Health check
-
-### Key Functions
-- **Query Preprocessing**: `structure_user_input_with_context()`
-- **Vector Search**: `search_single_collection_with_filtering()`
-- **Response Generation**: `generate_rag_response_with_context()`
-- **Conversation Management**: `get_conversation_history()`
-
-## 🔒 Security & Privacy
-
-- **Data Privacy**: No sensitive medical data is stored permanently
-- **API Security**: Environment variables for sensitive keys
-- **Session Management**: Secure chat session handling
-- **Rate Limiting**: Prevents API abuse
-
-## 📊 Performance
-
-- **Response Time**: Typically 2-5 seconds for complex queries
-- **Accuracy**: High precision for standard ICD-10 codes
-- **Scalability**: Supports multiple concurrent users
-- **Memory Usage**: Optimized for production deployment
-
-## 🚨 Important Disclaimers
-
-⚠️ **For Educational and Informational Purposes Only**
-
-This chatbot is designed to assist with medical coding education and provide general guidance. It should NOT be used as the sole source for clinical coding decisions. Always:
-
-- Consult official ICD-10-CM guidelines
-- Verify codes with certified medical coders
-- Follow your organization's coding policies
-- Review codes with healthcare providers when needed
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🆘 Support
-
-### Common Issues
-
-**Backend not starting?**
-- Check your `.env` file configuration
-- Ensure Qdrant and Supabase are accessible
-- Verify API keys are valid
-
-**Frontend connection errors?**
-- Confirm FastAPI server is running on port 8000
-- Check firewall settings
-- Verify CORS configuration
-
-**Empty responses?**
-- Check if Qdrant collection has data
-- Verify embedding model is working
-- Enable debug mode for detailed insights
-
-### Getting Help
-
-- 📧 Email: your-parvatkhattak03@example.com
-- 🐛 Issues: [GitHub Issues](https://github.com/parvatkhattak/Medical_chatbot/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/parvatkhattak/Medical_chatbot/discussions)
-
-## 🙏 Acknowledgments
-
-- **Google AI**: For Gemini API and embedding models
-- **Qdrant**: For vector database capabilities
-- **Streamlit**: For the excellent web framework
-- **FastAPI**: For the robust backend framework
-- **Medical Coding Community**: For domain expertise and feedback
-
-## 📈 Roadmap
-
-- [ ] Add CPT coding support
-- [ ] Implement user authentication
-- [ ] Add batch query processing
-- [ ] Mobile app development
-- [ ] Integration with EHR systems
-- [ ] Multi-language support
+Access at: [http://localhost:8501](http://localhost:8501)
 
 ---
 
-**Built with ❤️ for the medical coding community**
+## 📊 Data Source Details
+
+| Group | Description             | Files                                |
+| ----- | ----------------------- | ------------------------------------ |
+| 1     | ICD-10 Guidelines       | RAG1.pdf, RAG1\_1.xlsx               |
+| 2     | ICD-10 Alphabetic Index | RAG2.xlsx, RAG2\_1.pdf - RAG2\_3.pdf |
+| 3     | ICD-10 Tabular List     | RAG3.csv                             |
+
+* **Chunking Strategy**: One line per chunk (medical code integrity)
+* **Metadata**: Stored with vector entries for context filtering
+
+---
+
+## 🔧 Backend Highlights (`chatbot.py`)
+
+* **FastAPI-based** REST API
+* **Query Enhancement**:
+
+  * Maps vague terms to clinical equivalents
+  * Detects comorbidity patterns (e.g., CKD + HTN)
+* **Gemini-Based Features**:
+
+  * Rephrases natural queries for retrieval
+  * Extracts clinical diagnoses
+  * Generates final response using prompt chain
+* **Reranking**:
+
+  * Custom relevance score combining keyword/code match + length
+* **Context Handling**:
+
+  * Tracks age/gender/codes in history
+  * Follow-up detection using heuristics
+* **Debug Mode**:
+
+  * Logs: embeddings, context, source chunks, rerank scores
+
+---
+
+## 🌎 Frontend (`streamlit_app.py`)
+
+* **Responsive Chat UI**: Light/dark, mobile-friendly
+* **Session Chat**: Each user gets a persistent chat\_id
+* **Debug Panels**: Toggle to inspect internal state
+* **Quick Action Buttons**: Starter questions
+* **Custom Styling**: Inter font, gradients, and shadows
+
+---
+
+## 🌐 Vector Store (Qdrant)
+
+* Collection: `Medical_Coder_`
+* Vector Size: 768 (Gemini embedding)
+* Distance: Cosine
+* Stored Fields: `text`, `metadata` (filename, doc\_group, etc.)
+
+---
+
+## 🧪 Document Processor (`process_documents.py`)
+
+* Supports **PDF**, **Excel**, **CSV**
+* Auto-detects encoding (CSV)
+* Uses `langchain.text_splitter` for recursive chunking
+* Gemini embedding integration via `OptimizedGeminiEmbeddings`
+* Track progress with JSON tracker to skip reprocessing
+
+---
+
+## 📄 Project Structure
+
+```
+Medical_chatbot/
+├── chatbot.py              # FastAPI backend logic
+├── streamlit_app.py        # Streamlit UI
+├── process_documents.py    # Document loader/embedding
+├── create_collection.py    # Qdrant setup
+├── requirements.txt        # Dependencies
+├── .env                    # Secrets/config
+├── KB/                     # Folder for knowledge files
+└── README.md               # This file
+```
+
+---
+
+## 🚧 API Endpoints
+
+| Method | Endpoint                 | Description                    |
+| ------ | ------------------------ | ------------------------------ |
+| POST   | `/api/chat`              | Main chat entry                |
+| POST   | `/api/new-chat`          | Start new chat session         |
+| GET    | `/api/chat-history/{id}` | Retrieve previous conversation |
+| GET    | `/api/health`            | Health check                   |
+
+---
+
+## 🎨 Example Use Cases
+
+**Basic:**
+
+```
+What is the ICD-10 code for type 2 diabetes?
+```
+
+**Comorbidity:**
+
+```
+How do I code CKD stage 3 with hypertension?
+```
+
+**Follow-up:**
+
+```
+What if the same patient also has retinopathy?
+```
+
+**Search-based:**
+
+```
+Show me the Excludes1 notes for E11.9
+```
+
+---
+
+## ⛔ Disclaimers
+
+* **Educational Use Only**
+* Always validate codes with a certified medical coder
+* Follows official ICD-10 guidelines but not for clinical use
+
+---
+
+## 🌐 Roadmap
+
+* [ ] CPT Code Support
+* [ ] Auth + User Profiles
+* [ ] EHR System Integration
+* [ ] Offline Embedding Caching
+* [ ] Voice Input + Output
+* [ ] Mobile App
+
+---
+
+## ✨ Credits
+
+* **Google AI** - Gemini Embeddings & Generative Model
+* **Qdrant** - Vector Search
+* **Streamlit** - Frontend
+* **FastAPI** - Backend
+* **Langchain** - Chunking & Document Processing
+
+---
+
+**Made with ❤️ by Parvat Khattak for the medical coding community**
