@@ -276,7 +276,7 @@ Show me the Excludes1 notes for E11.9
 * **Qdrant** - Vector Search
 * **Streamlit** - Frontend
 * **FastAPI** - Backend
-* **Langchain** - Chunking & Document Processing
+* **Langchain** - Chunking and Document Processing
 
 ---
 
