@@ -1,4 +1,4 @@
-# 🏥 Medical Coding Assistant - Enhanced README
+# 🏥 Medical Coding Assistant 
 
 An AI-powered medical coding assistant built with **FastAPI** (backend) and **Streamlit** (frontend), integrating **Google Gemini AI** and **Qdrant** for Retrieval-Augmented Generation (RAG). This system offers intelligent ICD-10 guidance, leveraging multi-source medical documents.
 
